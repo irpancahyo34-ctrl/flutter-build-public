@@ -1,0 +1,127 @@
+name: Build Flutter APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'URL ZIP source'
+        required: true
+      tag:
+        description: 'Tag release'
+        required: true
+      build_type:
+        description: 'release atau debug'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download ZIP
+        id: download
+        run: |
+          set -e
+          URL="${{ github.event.inputs.zip_url }}"
+          echo "📥 URL: $URL"
+
+          MAX_RETRY=3
+          for i in $(seq 1 $MAX_RETRY); do
+            echo "🔄 Attempt $i/$MAX_RETRY"
+            HTTP_CODE=$(curl -L -s -w "%{http_code}" -o source.zip "$URL" || echo "000")
+            echo "📊 HTTP Code: $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Download sukses"
+              break
+            else
+              echo "⚠️ Attempt $i gagal"
+              if [ "$i" -eq "$MAX_RETRY" ]; then
+                echo "❌ Download gagal"
+                cat source.zip || true
+                exit 1
+              fi
+              sleep 3
+            fi
+          done
+
+          ls -lh source.zip
+          SIZE=$(stat -c%s source.zip)
+          echo "size=$SIZE" >> $GITHUB_OUTPUT
+
+      - name: Validate ZIP
+        run: |
+          set -e
+          SIZE="${{ steps.download.outputs.size }}"
+          echo "📦 Size: $SIZE bytes"
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "❌ File terlalu kecil"
+            cat source.zip
+            exit 1
+          fi
+          MAGIC=$(head -c 4 source.zip | xxd -p)
+          if [[ ! "$MAGIC" =~ ^504b ]]; then
+            echo "❌ Bukan ZIP valid (magic: $MAGIC)"
+            cat source.zip
+            exit 1
+          fi
+          echo "✅ ZIP valid"
+
+      - name: Extract ZIP
+        run: |
+          set -e
+          mkdir -p source
+          unzip -q source.zip -d source
+          echo "=== Isi source ==="
+          ls -la source/
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Cari project root
+        id: find
+        run: |
+          set -e
+          ROOT=$(find source -maxdepth 4 -name pubspec.yaml -exec dirname {} \; | head -1)
+          if [ -z "$ROOT" ]; then
+            echo "❌ pubspec.yaml gak ketemu"
+            find source -maxdepth 4 | head -50
+            exit 1
+          fi
+          echo "root=$ROOT" >> $GITHUB_OUTPUT
+          echo "✅ Project root: $ROOT"
+
+      - name: Flutter pub get
+        working-directory: ${{ steps.find.outputs.root }}
+        run: flutter pub get
+
+      - name: Flutter build APK
+        working-directory: ${{ steps.find.outputs.root }}
+        run: flutter build apk --${{ github.event.inputs.build_type }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.tag }}
+          path: |
+            ${{ steps.find.outputs.root }}/build/app/outputs/flutter-apk/app-release.apk
+            ${{ steps.find.outputs.root }}/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
