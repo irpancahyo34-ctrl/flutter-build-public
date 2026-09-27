@@ -1,0 +1,84 @@
+name: botmd_app
+description: HiyukiCrash - WhatsApp Automation Core
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.19.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ============ UI ============
+  cupertino_icons: ^1.0.8
+
+  # ============ NETWORK ============
+  http: ^1.2.2
+
+  # ============ STORAGE ============
+  shared_preferences: ^2.3.2
+
+  # ============ MEDIA ============
+  video_player: ^2.9.2
+  image_picker: ^1.1.2
+
+  # ============ FONT ============
+  google_fonts: ^6.2.1
+
+  # ============ DEVICE INFO ============
+  # ⚠️ JANGAN NAIKKAN device_info_plus ke 11.x — bikin crash di Android 14+
+  device_info_plus: ^10.1.2
+  battery_plus: ^6.0.2
+  connectivity_plus: ^6.0.5
+  package_info_plus: ^8.0.3
+
+  # ============ UTILS ============
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  # ============ ASSETS ============
+  assets:
+    - assets/images/
+    - assets/videos/
+    # ⬇️ UNCOMMENT kalau sudah siapkan font offline
+    # - assets/fonts/
+
+  # ============ FONTS (OPSIONAL) ============
+  # ⬇️ UNCOMMENT setelah download font dari fonts.google.com
+  # lalu taruh file .ttf di folder assets/fonts/
+  #
+  # fonts:
+  #   - family: Inter
+  #     fonts:
+  #       - asset: assets/fonts/Inter-Regular.ttf
+  #         weight: 400
+  #       - asset: assets/fonts/Inter-Medium.ttf
+  #         weight: 500
+  #       - asset: assets/fonts/Inter-SemiBold.ttf
+  #         weight: 600
+  #       - asset: assets/fonts/Inter-Bold.ttf
+  #         weight: 700
+  #       - asset: assets/fonts/Inter-ExtraBold.ttf
+  #         weight: 800
+  #
+  #   - family: PlusJakartaSans
+  #     fonts:
+  #       - asset: assets/fonts/PlusJakartaSans-Regular.ttf
+  #         weight: 400
+  #       - asset: assets/fonts/PlusJakartaSans-Medium.ttf
+  #         weight: 500
+  #       - asset: assets/fonts/PlusJakartaSans-SemiBold.ttf
+  #         weight: 600
+  #       - asset: assets/fonts/PlusJakartaSans-Bold.ttf
+  #         weight: 700
+  #       - asset: assets/fonts/PlusJakartaSans-ExtraBold.ttf
+  #         weight: 800
