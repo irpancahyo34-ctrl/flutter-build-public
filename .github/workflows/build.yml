@@ -88,17 +88,15 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.24.0'
-          channel: 'stable'
-          cache: true
-
-      - name: Cari project root
-        id: find
+      # ─────────────────────────────────────────────
+      # 🔍 STEP BARU: Deteksi versi Flutter dari project
+      # ─────────────────────────────────────────────
+      - name: Detect Flutter version
+        id: detect
         run: |
           set -e
+
+          # Cari pubspec.yaml dulu
           ROOT=$(find source -maxdepth 4 -name pubspec.yaml -exec dirname {} \; | head -1)
           if [ -z "$ROOT" ]; then
             echo "❌ pubspec.yaml gak ketemu"
@@ -108,12 +106,61 @@ jobs:
           echo "root=$ROOT" >> $GITHUB_OUTPUT
           echo "✅ Project root: $ROOT"
 
+          # ── Prioritas 1: cek .fvmrc ──
+          if [ -f "$ROOT/.fvmrc" ]; then
+            FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+            if [ -n "$FVM_VER" ]; then
+              echo "🎯 Versi dari .fvmrc: $FVM_VER"
+              echo "flutter=$FVM_VER" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          # ── Prioritas 2: cek field flutter_version di pubspec ──
+          FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
+          if [ -n "$FV" ] && [ "$FV" != "null" ]; then
+            echo "🎯 Versi dari pubspec flutter_version: $FV"
+            echo "flutter=$FV" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # ── Prioritas 3: mapping Dart SDK → Flutter ──
+          DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
+          echo "📋 Dart constraint: $DART_CONSTRAINT"
+
+          # Ambil angka minor Dart (contoh ">=3.8.1 <4.0.0" → 3.8)
+          DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
+          echo "📋 Dart minor: $DART_MINOR"
+
+          case "$DART_MINOR" in
+            3.0|3.1|3.2|3.3|3.4) FLUTTER="3.19.0" ;;
+            3.5)                 FLUTTER="3.24.0" ;;
+            3.6)                 FLUTTER="3.27.0" ;;
+            3.7)                 FLUTTER="3.29.0" ;;
+            3.8)                 FLUTTER="3.35.0" ;;
+            3.9|3.10|3.11)       FLUTTER="3.47.5" ;;
+            *)
+              echo "⚠️ Tidak ketemu mapping, pakai stable terbaru"
+              FLUTTER="stable"
+              ;;
+          esac
+
+          echo "🎯 Akan pakai Flutter: $FLUTTER"
+          echo "flutter=$FLUTTER" >> $GITHUB_OUTPUT
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.detect.outputs.flutter }}
+          channel: 'stable'
+          cache: true
+
       - name: Flutter pub get
-        working-directory: ${{ steps.find.outputs.root }}
+        working-directory: ${{ steps.detect.outputs.root }}
         run: flutter pub get
 
       - name: Flutter build APK
-        working-directory: ${{ steps.find.outputs.root }}
+        working-directory: ${{ steps.detect.outputs.root }}
         run: flutter build apk --${{ github.event.inputs.build_type }}
 
       - name: Upload APK
@@ -121,7 +168,7 @@ jobs:
         with:
           name: apk-${{ github.event.inputs.tag }}
           path: |
-            ${{ steps.find.outputs.root }}/build/app/outputs/flutter-apk/app-release.apk
-            ${{ steps.find.outputs.root }}/build/app/outputs/flutter-apk/app-debug.apk
+            ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/app-release.apk
+            ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 7
