@@ -26,6 +26,9 @@ jobs:
       contents: read
 
     steps:
+      # ══════════════════════════════════════════════
+      # 1. DOWNLOAD ZIP
+      # ══════════════════════════════════════════════
       - name: Download ZIP
         id: download
         run: |
@@ -56,6 +59,9 @@ jobs:
           SIZE=$(stat -c%s source.zip)
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
+      # ══════════════════════════════════════════════
+      # 2. VALIDATE ZIP
+      # ══════════════════════════════════════════════
       - name: Validate ZIP
         run: |
           set -e
@@ -74,6 +80,9 @@ jobs:
           fi
           echo "✅ ZIP valid"
 
+      # ══════════════════════════════════════════════
+      # 3. EXTRACT ZIP
+      # ══════════════════════════════════════════════
       - name: Extract ZIP
         run: |
           set -e
@@ -82,15 +91,18 @@ jobs:
           echo "=== Isi source ==="
           ls -la source/
 
+      # ══════════════════════════════════════════════
+      # 4. SETUP JAVA
+      # ══════════════════════════════════════════════
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      # ─────────────────────────────────────────────
-      # 🔍 STEP BARU: Deteksi versi Flutter dari project
-      # ─────────────────────────────────────────────
+      # ══════════════════════════════════════════════
+      # 5. DETECT FLUTTER VERSION (UPGRADED!)
+      # ══════════════════════════════════════════════
       - name: Detect Flutter version
         id: detect
         run: |
@@ -106,63 +118,185 @@ jobs:
           echo "root=$ROOT" >> $GITHUB_OUTPUT
           echo "✅ Project root: $ROOT"
 
-          # ── Prioritas 1: cek .fvmrc ──
+          # ─────────────────────────────────
+          # PRIORITAS 1: .fvmrc
+          # ─────────────────────────────────
           if [ -f "$ROOT/.fvmrc" ]; then
-            FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+            FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" \
+                      | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
             if [ -n "$FVM_VER" ]; then
-              echo "🎯 Versi dari .fvmrc: $FVM_VER"
+              echo "🎯 [.fvmrc] Flutter: $FVM_VER"
               echo "flutter=$FVM_VER" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
 
-          # ── Prioritas 2: cek field flutter_version di pubspec ──
-          FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
+          # ─────────────────────────────────
+          # PRIORITAS 2: flutter_version di pubspec.yaml
+          # ─────────────────────────────────
+          FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" \
+               | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
           if [ -n "$FV" ] && [ "$FV" != "null" ]; then
-            echo "🎯 Versi dari pubspec flutter_version: $FV"
+            echo "🎯 [pubspec flutter_version] Flutter: $FV"
             echo "flutter=$FV" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # ── Prioritas 3: mapping Dart SDK → Flutter ──
-          DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
-          echo "📋 Dart constraint: $DART_CONSTRAINT"
+          # ─────────────────────────────────
+          # PRIORITAS 3: pubspec.lock (PALING AKURAT!)
+          # ─────────────────────────────────
+          LOCK_DART=""
+          if [ -f "$ROOT/pubspec.lock" ]; then
+            LOCK_FLUTTER=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" \
+                           | grep -E '^\s*flutter\s*:' \
+                           | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+            if [ -n "$LOCK_FLUTTER" ]; then
+              echo "🎯 [pubspec.lock] Flutter constraint: $LOCK_FLUTTER"
+              echo "flutter=$LOCK_FLUTTER" >> $GITHUB_OUTPUT
+              exit 0
+            fi
 
-          # Ambil angka minor Dart (contoh ">=3.8.1 <4.0.0" → 3.8)
-          DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
+            LOCK_DART=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" \
+                        | grep -E '^\s*dart\s*:' \
+                        | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
+            echo "📋 [pubspec.lock] Dart: $LOCK_DART"
+          fi
+
+          # ─────────────────────────────────
+          # PRIORITAS 4: pubspec.yaml dart constraint
+          # ─────────────────────────────────
+          DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" \
+                            | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
+          echo "📋 [pubspec.yaml] Dart constraint: $DART_CONSTRAINT"
+
+          # Ambil minor Dart (prioritas dari lock)
+          DART_MINOR="${LOCK_DART:-$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)}"
           echo "📋 Dart minor: $DART_MINOR"
 
-          case "$DART_MINOR" in
-            3.0|3.1|3.2|3.3|3.4) FLUTTER="3.19.0" ;;
-            3.5)                 FLUTTER="3.24.0" ;;
-            3.6)                 FLUTTER="3.27.0" ;;
-            3.7)                 FLUTTER="3.29.0" ;;
-            3.8)                 FLUTTER="3.35.0" ;;
-            3.9|3.10|3.11)       FLUTTER="3.47.5" ;;
-            *)
-              echo "⚠️ Tidak ketemu mapping, pakai stable terbaru"
-              FLUTTER="stable"
-              ;;
-          esac
+          # ─────────────────────────────────
+          # MAPPING LENGKAP: Dart → Flutter
+          # ⚠️ Hanya versi yang SUDAH RILIS!
+          # ─────────────────────────────────
+          MAPPING="
+            2.0  1.0.0
+            2.1  1.12.13
+            2.2  1.17.0
+            2.3  1.20.0
+            2.4  1.22.0
+            2.5  2.0.0
+            2.6  2.0.0
+            2.7  2.2.0
+            2.8  2.5.0
+            2.9  2.8.0
+            2.10 2.10.0
+            2.11 2.10.0
+            2.12 2.0.0
+            2.13 2.2.0
+            2.14 2.5.0
+            2.15 2.8.0
+            2.16 2.10.0
+            2.17 3.0.0
+            2.18 3.3.0
+            2.19 3.7.0
+            3.0  3.10.0
+            3.1  3.13.0
+            3.2  3.16.0
+            3.3  3.19.0
+            3.4  3.22.0
+            3.5  3.24.0
+            3.6  3.27.0
+            3.7  3.29.0
+            3.8  3.32.0
+            3.9  3.35.0
+          "
+
+          FLUTTER=""
+          for line in $MAPPING; do
+            DM=$(echo "$line" | awk '{print $1}')
+            FV=$(echo "$line" | awk '{print $2}')
+            if [ "$DM" = "$DART_MINOR" ]; then
+              FLUTTER="$FV"
+              break
+            fi
+          done
+
+          if [ -z "$FLUTTER" ]; then
+            echo "⚠️ Dart minor '$DART_MINOR' tidak ada di mapping"
+            echo "⚠️ Fallback ke stable"
+            FLUTTER="stable"
+          fi
 
           echo "🎯 Akan pakai Flutter: $FLUTTER"
           echo "flutter=$FLUTTER" >> $GITHUB_OUTPUT
 
+      # ══════════════════════════════════════════════
+      # 6. VALIDASI VERSI (ANTI VERSI HANTU)
+      # ══════════════════════════════════════════════
+      - name: Validate Flutter Version
+        id: validate
+        run: |
+          set -e
+          VER="${{ steps.detect.outputs.flutter }}"
+          echo "🔍 Cek versi: $VER"
+
+          if [ "$VER" = "stable" ]; then
+            echo "✅ Pakai channel stable"
+            echo "flutter=stable" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Cek ke API Flutter resmi
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
+
+          if [ "$HTTP" != "200" ]; then
+            echo "❌ Flutter $VER tidak valid (HTTP $HTTP)"
+            echo "❌ Fallback ke stable"
+            echo "flutter=stable" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Flutter $VER valid"
+            echo "flutter=$VER" >> $GITHUB_OUTPUT
+          fi
+
+      # ══════════════════════════════════════════════
+      # 7. SETUP FLUTTER
+      # ══════════════════════════════════════════════
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ steps.detect.outputs.flutter }}
+          flutter-version: ${{ steps.validate.outputs.flutter }}
           channel: 'stable'
           cache: true
 
+      # ══════════════════════════════════════════════
+      # 8. FLUTTER PUB GET (dengan auto-retry)
+      # ══════════════════════════════════════════════
       - name: Flutter pub get
+        id: pubget
+        continue-on-error: true
         working-directory: ${{ steps.detect.outputs.root }}
-        run: flutter pub get
+        run: |
+          flutter --version
+          flutter pub get
 
+      - name: Retry pub get with latest stable
+        if: steps.pubget.outcome == 'failure'
+        working-directory: ${{ steps.detect.outputs.root }}
+        run: |
+          echo "⚠️ pub get gagal, coba upgrade Flutter ke stable terbaru"
+          flutter upgrade --force || true
+          flutter pub get
+
+      # ══════════════════════════════════════════════
+      # 9. BUILD APK
+      # ══════════════════════════════════════════════
       - name: Flutter build APK
         working-directory: ${{ steps.detect.outputs.root }}
         run: flutter build apk --${{ github.event.inputs.build_type }}
 
+      # ══════════════════════════════════════════════
+      # 10. UPLOAD APK
+      # ══════════════════════════════════════════════
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
