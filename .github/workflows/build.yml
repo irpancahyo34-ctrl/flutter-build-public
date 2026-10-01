@@ -361,28 +361,24 @@ jobs:
           echo "🤖 AI Error Analyzer (Groq) dimulai..."
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
           if [ -f "$LOG_FILE" ]; then
-            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk" "$LOG_FILE" | head -60 || true)
-            if [ $(echo "$FILTERED" | wc -l) -lt 5 ]; then
-              FILTERED=$(tail -200 "$LOG_FILE" || true)
+            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|\.dart:|undefined|undeclared|unresolved|no such|does not|compilation|compil|assert|typeerror|type '|null" "$LOG_FILE" | head -150 || true)
+            if [ $(echo "$FILTERED" | wc -l) -lt 10 ]; then
+              FILTERED=$(tail -300 "$LOG_FILE" || true)
             fi
           else
             FILTERED="Tidak ada build.log. Kemungkinan gagal di tahap awal."
           fi
-          FILTERED=$(echo "$FILTERED" | head -c 8000 || true)
+          FILTERED=$(echo "$FILTERED" | head -c 25000 || true)
 
-          P=$(printf 'Build Flutter gagal. Kasih jawaban SINGKAT & PADAT dalam Bahasa Indonesia.\n\nKONTEKS:\n- Flutter: %s\n- Build type: %s\n\nERROR LOG:\n%s\n\nJAWAB DENGAN FORMAT INI (maks 250 kata):\n\nERROR: [1 kalimat penyebab]\nFIX: [langkah konkret, maks 3 poin]\nVERSI YANG BENAR: [Flutter X.Y.Z kalau masalah versi, atau N/A kalau bukan]' "$FLUTTER_VER" "$BUILD_TYPE" "$FILTERED")
+          P=$(printf 'Kamu expert Flutter developer. Analisis error build berikut dengan LENGKAP.\n\nKONTEKS:\n- Flutter: %s\n- Build type: %s\n\nERROR LOG:\n%s\n\nJAWAB FORMAT INI (boleh panjang, sampai 800 kata):\n\nERROR: [penjelasan detail error]\nLOKASI: [file & baris kalau ada, contoh: lib/main.dart:45]\nPENYEBAB: [root cause, jelaskan detail]\nFIX: [langkah konkret, sebutkan nama file yang harus diubah, maks 5 poin]\nCONTOH KODE: [kalau ada, kasih contoh perbaikan]\nVERSI YANG BENAR: [Flutter X.Y.Z kalau masalah versi, atau N/A]' "$FLUTTER_VER" "$BUILD_TYPE" "$FILTERED")
 
-          jq -n --arg model "openai/gpt-oss-120b" --arg sys "Jawab singkat, padat, fokus dalam Bahasa Indonesia." --arg user "$P" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:700, temperature:0.3}' > /tmp/payload.json
+          jq -n --arg model "openai/gpt-oss-120b" --arg sys "Kamu expert Flutter developer. Jawab detail dalam Bahasa Indonesia. Sebutkan file dan baris error kalau ada." --arg user "$P" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.3}' > /tmp/payload.json
 
           echo "=== Kirim ke Groq (openai/gpt-oss-120b) ==="
           RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${GROQ_API_KEY}" \
             --data @/tmp/payload.json)
-
-          echo "=== RAW RESPONSE (max 800 char) ==="
-          echo "$RESPONSE" | head -c 800
-          echo ""
 
           AI_ANSWER=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
           if [ -z "$AI_ANSWER" ]; then
@@ -395,20 +391,25 @@ jobs:
           fi
 
           echo "==========================================="
-          echo "ANALISIS AI (Groq - openai/gpt-oss-120b):"
+          echo "ANALISIS AI (Groq):"
           echo "==========================================="
           echo "$AI_ANSWER"
+          echo "Panjang jawaban: $(echo "$AI_ANSWER" | wc -c) karakter"
+
           echo "$AI_ANSWER" > "${GITHUB_WORKSPACE}/ai-analysis.txt"
+          echo "$FILTERED" > "${GITHUB_WORKSPACE}/error-raw.txt"
+
           {
             echo "## ❌ Build Gagal"
             echo ""
             echo "- Flutter: $FLUTTER_VER"
             echo "- Build: $BUILD_TYPE"
             echo ""
-            echo "### 🤖 Analisis AI (Groq - openai/gpt-oss-120b)"
+            echo "### 🤖 Analisis AI (Groq)"
             echo ""
             echo "$AI_ANSWER"
           } >> $GITHUB_STEP_SUMMARY
+
           echo "✅ AI analysis selesai"
 
       - name: 📤 Upload AI Analysis
@@ -416,7 +417,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ai-analysis-${{ github.event.inputs.tag }}
-          path: ${{ github.workspace }}/ai-analysis.txt
+          path: |
+            ${{ github.workspace }}/ai-analysis.txt
+            ${{ github.workspace }}/error-raw.txt
           if-no-files-found: warn
           retention-days: 3
 
