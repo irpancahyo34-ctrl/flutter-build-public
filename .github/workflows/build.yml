@@ -32,36 +32,24 @@ jobs:
         run: |
           set -e
           URL="${{ github.event.inputs.zip_url }}"
-          echo "URL: $URL"
           MAX_RETRY=3
           for i in $(seq 1 $MAX_RETRY); do
-            echo "Attempt $i/$MAX_RETRY"
             HTTP_CODE=$(curl -L -s -w "%{http_code}" -o source.zip "$URL" || echo "000")
-            echo "HTTP Code: $HTTP_CODE"
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "Download sukses"
-              break
-            else
-              if [ "$i" -eq "$MAX_RETRY" ]; then
-                echo "Download gagal"; exit 1
-              fi
-              sleep 3
-            fi
+            if [ "$HTTP_CODE" = "200" ]; then break; fi
+            if [ "$i" -eq $MAX_RETRY ]; then exit 1; fi
+            sleep 3
           done
-          ls -lh source.zip
           SIZE=$(stat -c%s source.zip)
           echo "size=$SIZE" >> $GITHUB_OUTPUT
-          echo "Size: $SIZE bytes"
 
       - name: Validate ZIP
         shell: bash
         run: |
           set -e
           SIZE="${{ steps.download.outputs.size }}"
-          if [ "$SIZE" -lt 10000 ]; then echo "File kecil"; exit 1; fi
+          if [ "$SIZE" -lt 10000 ]; then exit 1; fi
           MAGIC=$(head -c 4 source.zip | xxd -p)
-          if [ "$MAGIC" != "504b0304" ]; then echo "Bukan ZIP"; exit 1; fi
-          echo "ZIP valid"
+          if [ "$MAGIC" != "504b0304" ]; then exit 1; fi
 
       - name: Extract ZIP
         shell: bash
@@ -69,7 +57,6 @@ jobs:
           set -e
           mkdir -p source
           unzip -q source.zip -d source
-          ls -la source/
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -82,41 +69,31 @@ jobs:
         shell: bash
         run: |
           set -e
-          ROOT=$(find source -maxdepth 4 -name pubspec.yaml -exec dirname {} \; | head -1)
-          if [ -z "$ROOT" ]; then
-            echo "pubspec.yaml gak ketemu"
-            find source -maxdepth 4 | head -50
-            exit 1
-          fi
+          PUBSPEC_PATH=$(find source -maxdepth 4 -name pubspec.yaml -exec realpath {} \; | head -1)
+          if [ -z "$PUBSPEC_PATH" ]; then exit 1; fi
+          ROOT=$(dirname "$PUBSPEC_PATH")
           echo "root=$ROOT" >> $GITHUB_OUTPUT
-          echo "Project root: $ROOT"
+          echo "pubspec_path=$PUBSPEC_PATH" >> $GITHUB_OUTPUT
 
           if [ -f "$ROOT/.fvmrc" ]; then
             FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
             if [ -n "$FVM_VER" ]; then
-              echo "fvmrc Flutter: $FVM_VER"
               echo "flutter=$FVM_VER" >> $GITHUB_OUTPUT
-              echo "source=manual" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
 
           FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
           if [ -n "$FV" ] && [ "$FV" != "null" ]; then
-            echo "pubspec flutter_version: $FV"
             echo "flutter=$FV" >> $GITHUB_OUTPUT
-            echo "source=manual" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
-          echo "Dart constraint: $DART_CONSTRAINT"
-          DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-          echo "Dart minor: $DART_MINOR"
+          DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
 
           if [ -z "$DART_MINOR" ] && [ -f "$ROOT/pubspec.lock" ]; then
-            DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" | grep -E '^\s*dart\s*:' | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-            echo "pubspec.lock Dart: $DART_MINOR"
+            DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" | grep -E '^\s*dart\s*:' | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
           fi
 
           MAPPING="
@@ -164,11 +141,10 @@ jobs:
           done
 
           if [ -z "$FLUTTER" ]; then
-            echo "Dart minor tidak ada di mapping, fallback stable"
-            FLUTTER="stable"
+            FLUTTER=$(curl -s https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json | jq -r '.releases[] | select(.channel=="stable") | .version' | head -1)
+            if [ -z "$FLUTTER" ] || [ "$FLUTTER" = "null" ]; then FLUTTER="3.35.0"; fi
           fi
 
-          echo "Flutter dipilih: $FLUTTER"
           echo "flutter=$FLUTTER" >> $GITHUB_OUTPUT
 
       - name: Validate Flutter Version
@@ -177,17 +153,12 @@ jobs:
         run: |
           set -e
           VER="${{ steps.detect.outputs.flutter }}"
-          echo "Cek versi: $VER"
-          if [ "$VER" = "stable" ]; then
-            echo "flutter=stable" >> $GITHUB_OUTPUT
-            exit 0
-          fi
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
           if [ "$HTTP" != "200" ]; then
-            echo "Flutter $VER tidak valid, fallback stable"
-            echo "flutter=stable" >> $GITHUB_OUTPUT
+            FALLBACK=$(curl -s https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json | jq -r '.releases[] | select(.channel=="stable") | .version' | head -1)
+            [ -z "$FALLBACK" ] && FALLBACK="3.35.0"
+            echo "flutter=$FALLBACK" >> $GITHUB_OUTPUT
           else
-            echo "Flutter $VER valid"
             echo "flutter=$VER" >> $GITHUB_OUTPUT
           fi
 
@@ -198,14 +169,13 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Auto-fix Android toolchain versions
+      - name: Auto-fix Android toolchain
         id: android_fix
         shell: bash
         working-directory: ${{ steps.detect.outputs.root }}
         run: |
           set -e
           FLUTTER_VER="${{ steps.validate.outputs.flutter }}"
-          echo "Flutter version: $FLUTTER_VER"
 
           GUDANG="
             1.0  4.10.2  3.0.0   1.2.71   8
@@ -234,17 +204,9 @@ jobs:
             3.47 8.14    8.9.1   2.1.10   17
           "
 
-          if [ "$FLUTTER_VER" = "stable" ]; then
-            FLUTTER_MM="3.35"
-          else
-            FLUTTER_MM=$(echo "$FLUTTER_VER" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
-          fi
+          FLUTTER_MM=$(echo "$FLUTTER_VER" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
 
-          GRADLE="8.12"
-          AGP="8.7.0"
-          KOTLIN="2.1.0"
-          JDK="17"
-
+          GRADLE="8.12"; AGP="8.7.0"; KOTLIN="2.1.0"; JDK="17"
           for line in $GUDANG; do
             FMM=$(echo "$line" | awk '{print $1}')
             GR=$(echo "$line" | awk '{print $2}')
@@ -256,8 +218,8 @@ jobs:
             fi
           done
 
-          echo "Toolchain: Gradle=$GRADLE, AGP=$AGP, Kotlin=$KOTLIN, JDK=$JDK"
           echo "gradle=$GRADLE" >> $GITHUB_OUTPUT
+          echo "jdk=$JDK" >> $GITHUB_OUTPUT
 
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
@@ -287,8 +249,6 @@ jobs:
             grep -q "org.gradle.jvmargs" "$GRADLE_PROPS" || echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G" >> "$GRADLE_PROPS"
           fi
 
-          echo "Toolchain Android sudah di-fix"
-
       - name: Setup Java (custom)
         if: steps.android_fix.outputs.jdk != '17'
         uses: actions/setup-java@v4
@@ -313,7 +273,6 @@ jobs:
         shell: bash
         run: |
           set +e
-          echo "pub get gagal, coba ulang"
           flutter pub get 2>&1 | tee -a "${{ github.workspace }}/build.log"
           exit 0
 
@@ -343,21 +302,18 @@ jobs:
         shell: bash
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          TAG: ${{ github.event.inputs.tag }}
           BUILD_TYPE: ${{ github.event.inputs.build_type }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FLUTTER_VER: ${{ steps.detect.outputs.flutter }}
         run: |
           set -e
-          echo "AI Error Analyzer (Groq) dimulai"
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
           if [ -f "$LOG_FILE" ]; then
-            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|undefined|unresolved|no such|does not|compilation|compil|assert|typeerror|null" "$LOG_FILE" | head -150 || true)
+            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|undefined|unresolved|no such|does not|compilation|compil|assert|typeerror|null|pubspec|dependency|resolve|constraint" "$LOG_FILE" | head -150 || true)
             if [ $(echo "$FILTERED" | wc -l) -lt 10 ]; then
               FILTERED=$(tail -300 "$LOG_FILE" || true)
             fi
           else
-            FILTERED="build.log tidak dihasilkan. Build gagal sebelum step pub get selesai. Flutter version: ${FLUTTER_VER}. Build type: ${BUILD_TYPE}."
+            FILTERED="build.log tidak dihasilkan. Flutter version: ${FLUTTER_VER}. Build type: ${BUILD_TYPE}."
           fi
           FILTERED=$(echo "$FILTERED" | head -c 25000 || true)
 
@@ -376,7 +332,6 @@ jobs:
             echo "Tulis PLAIN TEXT saja, JANGAN pakai markdown"
             echo "DILARANG pakai simbol bintang pagar pipa garis bawah tanda lebih besar tanda kurung siku backtick"
             echo "DILARANG bikin tabel"
-            echo "DILARANG bikin header dengan garis"
             echo "Cukup pakai huruf biasa angka titik koma tanda tanya tanda seru dan tanda hubung biasa"
             echo ""
             echo "FORMAT JAWABAN plain text saja:"
@@ -400,7 +355,6 @@ jobs:
             --rawfile user /tmp/prompt.txt \
             '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.3}' > /tmp/payload.json
 
-          echo "Kirim ke Groq"
           RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${GROQ_API_KEY}" \
@@ -409,32 +363,11 @@ jobs:
           AI_ANSWER=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
           if [ -z "$AI_ANSWER" ]; then
             API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null || true)
-            if [ -n "$API_ERROR" ]; then
-              AI_ANSWER="API Error: $API_ERROR"
-            else
-              AI_ANSWER="AI kosong. Cek GROQ_API_KEY atau kuota Groq."
-            fi
+            if [ -n "$API_ERROR" ]; then AI_ANSWER="API Error: $API_ERROR"; else AI_ANSWER="AI kosong."; fi
           fi
 
-          echo "==========================================="
-          echo "ANALISIS AI (Groq):"
-          echo "==========================================="
-          echo "$AI_ANSWER"
           echo "$AI_ANSWER" > "${GITHUB_WORKSPACE}/ai-analysis.txt"
           echo "$FILTERED" > "${GITHUB_WORKSPACE}/error-raw.txt"
-
-          {
-            echo "## Build Gagal"
-            echo ""
-            echo "Flutter: $FLUTTER_VER"
-            echo "Build: $BUILD_TYPE"
-            echo ""
-            echo "### Analisis AI (Groq)"
-            echo ""
-            echo "$AI_ANSWER"
-          } >> $GITHUB_STEP_SUMMARY
-
-          echo "AI analysis selesai"
 
       - name: Upload AI Analysis
         if: failure()
@@ -447,44 +380,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Auto-Fix pubspec.yaml (kalau error versi)
+      - name: Auto-Fix pubspec.yaml
         id: pubspec_fix
         if: failure()
         shell: bash
-        working-directory: ${{ steps.detect.outputs.root }}
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FLUTTER_VER: ${{ steps.detect.outputs.flutter }}
+          PUBSPEC_PATH: ${{ steps.detect.outputs.pubspec_path }}
         run: |
           set -e
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
-          PUBSPEC="${{ steps.detect.outputs.root }}/pubspec.yaml"
           FIXED_DIR="${GITHUB_WORKSPACE}/pubspec-fixed"
           mkdir -p "$FIXED_DIR"
 
-          if [ ! -f "$PUBSPEC" ]; then
+          if [ -z "$PUBSPEC_PATH" ] || [ ! -f "$PUBSPEC_PATH" ]; then
             echo "pubspec.yaml tidak ada, skip"
             exit 0
           fi
 
-          IS_VERSION_ERROR=false
-          if [ -f "$LOG_FILE" ]; then
-            if grep -q -iE "dart sdk version|sdk version.*requires|version solving failed|incompatible.*sdk|requires sdk|flutter.*version.*incompatible" "$LOG_FILE"; then
-              IS_VERSION_ERROR=true
-            fi
-          fi
-
-          if [ "$IS_VERSION_ERROR" = false ]; then
-            echo "Bukan error versi, skip auto-fix pubspec"
+          if [ ! -f "$LOG_FILE" ]; then
+            echo "build.log tidak ada, skip auto-fix"
             exit 0
           fi
 
-          echo "Error versi terdeteksi, AI akan generate pubspec baru"
+          if ! grep -q -iE "pubspec|dart sdk|sdk version|version solving|incompatible|requires sdk|dependency|resolve|constraint|invalid|not found" "$LOG_FILE"; then
+            echo "Bukan error pubspec, skip"
+            exit 0
+          fi
 
-          PUBSPEC_CONTENT=$(cat "$PUBSPEC")
-          FLUTTER_VER="${{ steps.detect.outputs.flutter }}"
+          echo "Error pubspec terdeteksi, generate pubspec baru"
+
+          PUBSPEC_CONTENT=$(cat "$PUBSPEC_PATH")
 
           {
-            echo "Kamu expert Flutter developer. Tugas kamu: PERBAIKI pubspec.yaml berikut agar kompatibel dengan error versi yang terjadi."
+            echo "Kamu expert Flutter developer. Tugas kamu: PERBAIKI pubspec.yaml berikut agar kompatibel dengan error yang terjadi."
             echo ""
             echo "VERSI FLUTTER YANG DIPAKAI: ${FLUTTER_VER}"
             echo ""
@@ -496,11 +426,10 @@ jobs:
             echo "JANGAN ada penjelasan, JANGAN ada markdown, JANGAN ada kode blok"
             echo "Mulai langsung dari baris pertama (biasanya name:)"
             echo "Perbaiki constraint sdk agar sesuai versi Flutter"
-            echo "Perbaiki constraint flutter_version kalau ada"
             echo "JANGAN ubah nama package"
             echo "JANGAN ubah dependencies yang tidak perlu"
             echo "JANGAN hapus dependency yang sudah ada"
-            echo "JANGAN hapus section apapun (flutter:, dev_dependencies:, dll)"
+            echo "JANGAN hapus section apapun"
             echo "Hanya naikkan atau turunkan versi dependency yang KONFLIK saja"
             echo "Kalau ragu, biarkan saja"
           } > /tmp/pubspec-prompt.txt
@@ -511,7 +440,6 @@ jobs:
             --rawfile user /tmp/pubspec-prompt.txt \
             '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.2}' > /tmp/pubspec-payload.json
 
-          echo "Minta AI generate pubspec.yaml baru..."
           RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${GROQ_API_KEY}" \
@@ -528,28 +456,16 @@ jobs:
           NEW_PUBSPEC=$(echo "$NEW_PUBSPEC" | sed -E 's/^```ya?ml$//; s/^```$//' | sed '/^```/d')
 
           VALID=true
-          if ! echo "$NEW_PUBSPEC" | grep -q "^name:"; then
-            echo "VALIDASI GAGAL: name hilang"
-            VALID=false
-          fi
-          if ! echo "$NEW_PUBSPEC" | grep -q "^dependencies:"; then
-            echo "VALIDASI GAGAL: dependencies hilang"
-            VALID=false
-          fi
+          if ! echo "$NEW_PUBSPEC" | grep -q "^name:"; then VALID=false; fi
+          if ! echo "$NEW_PUBSPEC" | grep -q "^dependencies:"; then VALID=false; fi
           OLD_LINES=$(echo "$PUBSPEC_CONTENT" | wc -l)
           NEW_LINES=$(echo "$NEW_PUBSPEC" | wc -l)
-          echo "Baris pubspec asli: $OLD_LINES, baru: $NEW_LINES"
-          if [ "$NEW_LINES" -lt $((OLD_LINES / 2)) ]; then
-            echo "VALIDASI GAGAL: pubspec baru terlalu pendek"
-            VALID=false
-          fi
+          if [ "$NEW_LINES" -lt $((OLD_LINES / 2)) ]; then VALID=false; fi
 
           if [ "$VALID" = false ]; then
-            echo "Pubspec baru tidak valid, tidak dikirim ke user"
+            echo "Pubspec baru tidak valid"
             exit 0
           fi
-
-          echo "Pubspec baru lolos validasi"
 
           echo "$NEW_PUBSPEC" > "$FIXED_DIR/pubspec.yaml"
           echo "$PUBSPEC_CONTENT" > "$FIXED_DIR/pubspec-original.yaml"
@@ -560,13 +476,9 @@ jobs:
             echo "CARA PAKAI:"
             echo "1. Download file pubspec-fixed.zip"
             echo "2. Extract"
-            echo "3. Ganti file pubspec.yaml di project kamu dengan yang baru"
+            echo "3. Ganti file pubspec.yaml di project kamu"
             echo "4. Jalankan: flutter pub get"
             echo "5. Build ulang dari bot"
-            echo ""
-            echo "File di dalam zip:"
-            echo "- pubspec.yaml         : versi baru (hasil AI)"
-            echo "- pubspec-original.yaml: versi asli (backup)"
             echo ""
             echo "VERSI FLUTTER: ${FLUTTER_VER}"
           } > "$FIXED_DIR/ARAHAN.txt"
