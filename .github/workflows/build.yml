@@ -1,108 +1,107 @@
-name: Flutter Build
+name: Build Flutter APK
 
 on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
     inputs:
-      build_url:
-        description: 'URL source zip'
-        required: true
-      user_id:
-        description: 'User ID'
+      zip_url:
+        description: 'URL ZIP source'
         required: true
       tag:
-        description: 'Build tag'
+        description: 'Tag release'
         required: true
       build_type:
-        description: 'debug / release / profile'
-        required: false
-        default: 'debug'
+        description: 'release atau debug'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
 
     steps:
-      # ─────────────────────────────────────────────
-      # 1. DOWNLOAD SOURCE
-      # ─────────────────────────────────────────────
-      - name: 📥 Download Source
+      - name: Download ZIP
         id: download
+        shell: bash
         run: |
           set -e
-          URL="${{ inputs.build_url }}"
-          echo "🔗 URL: $URL"
-
+          URL="${{ github.event.inputs.zip_url }}"
+          echo "URL: $URL"
           MAX_RETRY=3
           for i in $(seq 1 $MAX_RETRY); do
-            echo "📥 Attempt $i/$MAX_RETRY"
+            echo "Attempt $i/$MAX_RETRY"
             HTTP_CODE=$(curl -L -s -w "%{http_code}" -o source.zip "$URL" || echo "000")
-            echo "📥 HTTP Code: $HTTP_CODE"
+            echo "HTTP Code: $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Download sukses"
+              echo "Download sukses"
               break
             else
               if [ "$i" -eq "$MAX_RETRY" ]; then
-                echo "❌ Download gagal"
+                echo "Download gagal"
                 exit 1
               fi
               sleep 3
             fi
           done
-
           ls -lh source.zip
           SIZE=$(stat -c%s source.zip)
           echo "size=$SIZE" >> $GITHUB_OUTPUT
+          echo "Size: $SIZE bytes"
 
-      - name: 🔍 Validasi ZIP
+      - name: Validate ZIP
+        shell: bash
         run: |
           set -e
           SIZE="${{ steps.download.outputs.size }}"
-          echo "📦 Size: $SIZE bytes"
           if [ "$SIZE" -lt 10000 ]; then
-            echo "❌ File terlalu kecil"
+            echo "File terlalu kecil"
             exit 1
           fi
           MAGIC=$(head -c 4 source.zip | xxd -p)
           if [ "$MAGIC" != "504b0304" ]; then
-            echo "❌ Bukan ZIP valid (magic: $MAGIC)"
+            echo "Bukan ZIP valid (magic: $MAGIC)"
             exit 1
           fi
-          echo "✅ ZIP valid"
+          echo "ZIP valid"
 
-      - name: 📂 Extract Source
+      - name: Extract ZIP
+        shell: bash
         run: |
+          set -e
           mkdir -p source
           unzip -q source.zip -d source
           echo "=== Isi source ==="
           ls -la source/
 
-      # ─────────────────────────────────────────────
-      # 2. SETUP JAVA
-      # ─────────────────────────────────────────────
-      - name: ☕ Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: zulu
-          java-version: 17
-          java-package: jdk
+          distribution: 'zulu'
+          java-version: '17'
 
-      # ─────────────────────────────────────────────
-      # 3. DETEKSI VERSI FLUTTER
-      # ─────────────────────────────────────────────
-      - name: 🔎 Deteksi Flutter Version
+      - name: Detect Flutter version
         id: detect
+        shell: bash
         run: |
           set -e
-
           ROOT=$(find source -maxdepth 4 -name pubspec.yaml -exec dirname {} \; | head -1)
           if [ -z "$ROOT" ]; then
-            echo "❌ pubspec.yaml gak ketemu"
+            echo "pubspec.yaml gak ketemu"
             find source -maxdepth 4 | head -50
             exit 1
           fi
           echo "root=$ROOT" >> $GITHUB_OUTPUT
-          echo "✅ Project root: $ROOT"
+          echo "Project root: $ROOT"
 
           FLUTTER_VER=""
           SOURCE=""
@@ -126,7 +125,7 @@ jobs:
 
           if [ -z "$FLUTTER_VER" ]; then
             DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
-            echo "📋 Dart constraint: $DART_CONSTRAINT"
+            echo "Dart constraint: $DART_CONSTRAINT"
 
             DART_LOWER=$(echo "$DART_CONSTRAINT" | grep -oE '>=[[:space:]]*[0-9]+\.[0-9]+(\.[0-9]+)?' | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
             if [ -z "$DART_LOWER" ]; then
@@ -139,8 +138,8 @@ jobs:
             DART_FULL="$DART_LOWER"
             DART_MINOR=$(echo "$DART_LOWER" | grep -oE '^[0-9]+\.[0-9]+' || true)
 
-            echo "📋 Dart full: $DART_FULL"
-            echo "📋 Dart minor: $DART_MINOR"
+            echo "Dart full: $DART_FULL"
+            echo "Dart minor: $DART_MINOR"
 
             MAPPING="2.0:1.0.0 2.1:1.12.13 2.2:1.17.0 2.3:1.20.0 2.4:1.22.0 2.5:2.0.0 2.6:2.0.0 2.7:2.2.0 2.8:2.5.0 2.9:2.8.0 2.10:2.10.0 2.11:2.10.0 2.12:2.0.0 2.13:2.2.0 2.14:2.5.0 2.15:2.8.0 2.16:2.10.0 2.17:3.0.0 2.18:3.3.0 2.19:3.7.0 3.0:3.10.0 3.1:3.13.0 3.2:3.16.0 3.3:3.19.0 3.4:3.22.0 3.5:3.24.0 3.6:3.27.0 3.7:3.29.0 3.8:3.32.0 3.9:3.32.0 3.10:3.35.0 3.11:3.35.0"
 
@@ -158,47 +157,42 @@ jobs:
           fi
 
           if [ -z "$FLUTTER_VER" ]; then
-            echo "⚠️ Tidak match, fallback ke channel stable (kosong)"
+            echo "Tidak match, fallback ke stable channel"
             FLUTTER_VER=""
             SOURCE="fallback-stable-channel"
           fi
 
-          echo "🎯 Flutter version: '${FLUTTER_VER}' (dari: $SOURCE)"
+          echo "Flutter version: '${FLUTTER_VER}' (dari: $SOURCE)"
           echo "flutter=$FLUTTER_VER" >> $GITHUB_OUTPUT
           echo "source=$SOURCE" >> $GITHUB_OUTPUT
           echo "dart_full=$DART_FULL" >> $GITHUB_OUTPUT
           echo "dart_minor=$DART_MINOR" >> $GITHUB_OUTPUT
 
-      # ─────────────────────────────────────────────
-      # 4. VALIDASI VERSI (kalau ada versi spesifik)
-      # ─────────────────────────────────────────────
-      - name: ✅ Validasi Versi Flutter
+      - name: Validate Flutter Version
         id: validate
+        shell: bash
         run: |
           set -e
           VER="${{ steps.detect.outputs.flutter }}"
 
           if [ -z "$VER" ]; then
-            echo "ℹ️ Versi kosong → pakai stable channel"
+            echo "Versi kosong, pakai stable channel"
             echo "flutter=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "🔍 Cek versi: $VER"
+          echo "Validasi versi: $VER"
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
 
           if [ "$HTTP" != "200" ]; then
-            echo "❌ Flutter $VER tidak valid (HTTP $HTTP) → fallback stable channel"
+            echo "Flutter $VER tidak valid (HTTP $HTTP), fallback stable"
             echo "flutter=" >> $GITHUB_OUTPUT
           else
-            echo "✅ Flutter $VER valid"
+            echo "Flutter $VER valid"
             echo "flutter=$VER" >> $GITHUB_OUTPUT
           fi
 
-      # ─────────────────────────────────────────────
-      # 5. SETUP FLUTTER
-      # ─────────────────────────────────────────────
-      - name: 🐦 Setup Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ steps.validate.outputs.flutter }}
@@ -206,40 +200,50 @@ jobs:
           cache: true
           architecture: X64
 
-      # ─────────────────────────────────────────────
-      # 6. FLUTTER VERSION INFO
-      # ─────────────────────────────────────────────
-      - name: 📋 Flutter Info
+      - name: Flutter doctor
+        shell: bash
         run: |
           flutter --version
           flutter config --no-analytics || true
+          flutter doctor -v || true
 
-      # ─────────────────────────────────────────────
-      # 7. PUB GET
-      # ─────────────────────────────────────────────
-      - name: 📦 Flutter Pub Get
+      - name: Flutter pub get
         id: pubget
+        continue-on-error: true
         working-directory: ${{ steps.detect.outputs.root }}
+        shell: bash
         run: |
           set +e
-          flutter pub get 2>&1 | tee pubget.log
-          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+          flutter --version 2>&1 | tee "${{ github.workspace }}/build.log"
+          flutter pub get 2>&1 | tee -a "${{ github.workspace }}/build.log"
+          exit 0
 
-      # ─────────────────────────────────────────────
-      # 8. SET TOOLCHAIN (AFTER pub get!)
-      # ─────────────────────────────────────────────
-      - name: 🔧 Set Toolchain (Gradle/AGP/Kotlin)
+      - name: Retry pub get
+        if: steps.pubget.outcome == 'failure'
+        working-directory: ${{ steps.detect.outputs.root }}
+        shell: bash
+        run: |
+          set +e
+          echo "pub get gagal, coba ulang"
+          flutter pub get 2>&1 | tee -a "${{ github.workspace }}/build.log"
+          exit 0
+
+      - name: Auto-fix Android toolchain (after pub get)
+        id: android_fix
+        shell: bash
         working-directory: ${{ steps.detect.outputs.root }}
         run: |
           set -e
-
           FLUTTER_REAL=$(flutter --version | head -1 | awk '{print $2}')
           FLUTTER_MM=$(echo "$FLUTTER_REAL" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
           echo "Flutter: $FLUTTER_REAL ($FLUTTER_MM)"
 
           GUDANG="3.0:7.5:7.4.2:1.7.10:11 3.3:7.5:7.4.2:1.7.10:11 3.7:7.5:7.4.2:1.7.10:11 3.10:8.0:8.0.2:1.8.0:17 3.13:8.1.0:8.1.0:1.8.0:17 3.16:8.3:8.1.1:1.8.22:17 3.19:8.3:8.2.1:1.8.22:17 3.22:8.4:8.3.0:1.9.22:17 3.24:8.6:8.3.0:1.9.24:17 3.27:8.9:8.6.0:2.0.20:17 3.29:8.10:8.7.0:2.0.21:17 3.32:8.12:8.7.0:2.1.0:17 3.35:8.14:8.7.0:2.1.0:17"
 
-          GRADLE="8.14"; AGP="8.7.0"; KOTLIN="2.1.0"; JDK="17"
+          GRADLE="8.14"
+          AGP="8.7.0"
+          KOTLIN="2.1.0"
+          JDK="17"
 
           for pair in $GUDANG; do
             FMM=$(echo "$pair" | cut -d: -f1)
@@ -252,12 +256,16 @@ jobs:
             fi
           done
 
-          echo "🔧 Toolchain: Gradle=$GRADLE AGP=$AGP Kotlin=$KOTLIN JDK=$JDK"
+          echo "Toolchain: Gradle=$GRADLE AGP=$AGP Kotlin=$KOTLIN JDK=$JDK"
+          echo "gradle=$GRADLE" >> $GITHUB_OUTPUT
+          echo "agp=$AGP" >> $GITHUB_OUTPUT
+          echo "kotlin=$KOTLIN" >> $GITHUB_OUTPUT
+          echo "jdk=$JDK" >> $GITHUB_OUTPUT
 
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
             sed -i -E "s|gradle-[0-9]+\.[0-9]+(\.[0-9]+)?-(all|bin)\.zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER"
-            echo "  ✔ Gradle wrapper → $(grep distributionUrl "$WRAPPER" | head -1)"
+            echo "  Gradle wrapper: $(grep distributionUrl "$WRAPPER" | head -1)"
           fi
 
           for SETTINGS in android/settings.gradle.kts android/settings.gradle; do
@@ -266,7 +274,7 @@ jobs:
               sed -i -E "s|(id\s+'com\.android\.application'\s+version\s+')[^']+|\1${AGP}|g" "$SETTINGS"
               sed -i -E "s|(id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\")[^\"]+|\1${KOTLIN}|g" "$SETTINGS"
               sed -i -E "s|(id\s+'org\.jetbrains\.kotlin\.android'\s+version\s+')[^']+|\1${KOTLIN}|g" "$SETTINGS"
-              echo "  ✔ $SETTINGS updated"
+              echo "  $SETTINGS updated"
             fi
           done
 
@@ -284,7 +292,7 @@ jobs:
           if [ -n "$APP_BUILD" ]; then
             sed -i -E "s|compileSdk\s*=\s*[0-9]+|compileSdk = 36|g" "$APP_BUILD"
             sed -i -E "s|compileSdkVersion\s+[0-9]+|compileSdkVersion 36|g" "$APP_BUILD"
-            echo "  ✔ compileSdk → 36 di $APP_BUILD"
+            echo "  compileSdk: 36 di $APP_BUILD"
           fi
 
           GRADLE_PROPS="android/gradle.properties"
@@ -297,30 +305,27 @@ jobs:
 
           if [ -f "$WRAPPER" ]; then
             sed -i -E "s|gradle-[0-9]+\.[0-9]+(\.[0-9]+)?-(all|bin)\.zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER"
-            echo "  ✔ Gradle wrapper re-applied: $(grep distributionUrl "$WRAPPER" | head -1)"
+            echo "  Gradle wrapper re-applied: $(grep distributionUrl "$WRAPPER" | head -1)"
           fi
 
-      # ─────────────────────────────────────────────
-      # 9. BUILD APK
-      # ─────────────────────────────────────────────
-      - name: 🏗️ Flutter Build APK
+      - name: Flutter build APK
         id: build
-        working-directory: ${{ steps.detect.outputs.root }}
         continue-on-error: true
+        working-directory: ${{ steps.detect.outputs.root }}
+        shell: bash
         run: |
           set +e
-          BUILD_TYPE="${{ inputs.build_type }}"
-          [ -z "$BUILD_TYPE" ] && BUILD_TYPE="debug"
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          if [ -z "$BUILD_TYPE" ]; then BUILD_TYPE="debug"; fi
 
-          LOG_FILE="${GITHUB_WORKSPACE}/build.log"
-
-          echo "=== Build: $BUILD_TYPE ===" | tee "$LOG_FILE"
+          LOG_FILE="${{ github.workspace }}/build.log"
+          echo "=== Build: $BUILD_TYPE ===" | tee -a "$LOG_FILE"
 
           flutter build apk --$BUILD_TYPE --android-skip-build-dependency-validation 2>&1 | tee -a "$LOG_FILE"
           EXIT_CODE=${PIPESTATUS[0]}
 
           if [ "$EXIT_CODE" -ne 0 ]; then
-            echo "⚠️ Retry tanpa flag skip validation..." | tee -a "$LOG_FILE"
+            echo "Retry tanpa flag skip validation..." | tee -a "$LOG_FILE"
             flutter build apk --$BUILD_TYPE 2>&1 | tee -a "$LOG_FILE"
             EXIT_CODE=${PIPESTATUS[0]}
           fi
@@ -328,99 +333,123 @@ jobs:
           echo "build_exit=$EXIT_CODE" >> $GITHUB_OUTPUT
           exit $EXIT_CODE
 
-      # ─────────────────────────────────────────────
-      # 10. AI ERROR ANALYZER (GROQ)
-      # ─────────────────────────────────────────────
-      - name: 🤖 AI Error Analyzer (Groq)
+      - name: Upload APK
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.tag }}
+          path: |
+            ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/app-release.apk
+            ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: warn
+          retention-days: 7
+
+      # ═══════════════════════════════════════════════════════
+      # AI ERROR ANALYZER — GROQ (GRATIS, 14RB REQ/HARI)
+      # ═══════════════════════════════════════════════════════
+      - name: AI Error Analyzer (Groq)
         if: always()
+        shell: bash
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TAG: ${{ github.event.inputs.tag }}
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FLUTTER_VER: ${{ steps.detect.outputs.flutter }}
+          DART_FULL: ${{ steps.detect.outputs.dart_full }}
+          DART_MINOR: ${{ steps.detect.outputs.dart_minor }}
+          SOURCE: ${{ steps.detect.outputs.source }}
         run: |
           set +e
-          echo "🤖 AI Error Analyzer (Groq) dimulai..."
+          echo "AI Error Analyzer (Groq) dimulai..."
 
+          # ─── Cari file log: build.log dulu, fallback err_*.txt / *.log ───
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
           if [ ! -f "$LOG_FILE" ] || [ ! -s "$LOG_FILE" ]; then
-            echo "⚠️ build.log tidak ada/kosong, cari log lain..."
-            LOG_FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f \( -name "err_*.txt" -o -name "*.log" \) 2>/dev/null | head -1)
+            echo "build.log tidak ada/kosong, cari file log lain..."
+            LOG_FILE=$(find "${GITHUB_WORKSPACE}" -maxdepth 3 -type f \( -name "err_*.txt" -o -name "*.log" -o -name "source.zip" \) 2>/dev/null | head -1)
           fi
 
           if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
-            echo "📄 Pakai log: $LOG_FILE"
-            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|gradle|agp" "$LOG_FILE" | head -60)
+            echo "Pakai log: $LOG_FILE"
+            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|gradle|agp" "$LOG_FILE" | head -60 || true)
             LINES=$(echo "$FILTERED" | wc -l)
             if [ "$LINES" -lt 3 ]; then
-              FILTERED=$(tail -150 "$LOG_FILE")
+              FILTERED=$(tail -150 "$LOG_FILE" || true)
             fi
           else
-            FILTERED="Build gagal SEBELUM step build dieksekusi. Cek step 'Setup Flutter' atau 'Deteksi Flutter Version' di workflow. Kemungkinan besar masalah versi Flutter/Dart constraint atau mapping."
+            FILTERED="Build gagal SEBELUM step build dieksekusi. Cek step 'Setup Flutter', 'Detect Flutter version', atau 'Validate Flutter Version'. Kemungkinan besar masalah versi Flutter/Dart constraint atau mapping."
           fi
 
-          FILTERED=$(echo "$FILTERED" | head -c 4000)
+          FILTERED=$(echo "$FILTERED" | head -c 4000 || true)
 
-          P=$(printf 'Build Flutter gagal. Jawab SINGKAT & PADAT dalam Bahasa Indonesia.\n\nKONTEKS:\n- Flutter terinstall: %s\n- Dart dibutuhkan: %s\n- Build type: %s\n- Deteksi source: %s\n\nERROR LOG:\n%s\n\nJAWAB DENGAN FORMAT INI (maks 250 kata):\n\nERROR: [1 kalimat singkat]\nPENYEBAB: [akar masalah]\nFIX: [langkah konkret 1-2-3]\nVERSI YANG BENAR: [Flutter X.Y.Z + Gradle/AGP kalau masalah toolchain]' \
-            "${{ steps.detect.outputs.flutter || 'unknown' }}" \
-            "${{ steps.detect.outputs.dart_full || 'unknown' }}" \
-            "${{ inputs.build_type || 'debug' }}" \
-            "${{ steps.detect.outputs.source || 'unknown' }}" \
+          # ─── Prompt ringkas & fokus ───
+          P=$(printf 'Build Flutter gagal. Jawab SINGKAT & PADAT dalam Bahasa Indonesia.\n\nKONTEKS:\n- Flutter terinstall: %s\n- Dart dibutuhkan: %s\n- Dart minor: %s\n- Build type: %s\n- Deteksi source: %s\n\nERROR LOG:\n%s\n\nFORMAT JAWABAN (maks 250 kata):\n\nERROR: [1 kalimat]\nPENYEBAB: [akar masalah]\nFIX: [langkah konkret 1-2-3]\nVERSI YANG BENAR: [Flutter X.Y.Z + Gradle/AGP kalau masalah toolchain]' \
+            "${FLUTTER_VER:-unknown}" \
+            "${DART_FULL:-unknown}" \
+            "${DART_MINOR:-unknown}" \
+            "${BUILD_TYPE:-debug}" \
+            "${SOURCE:-unknown}" \
             "$FILTERED")
 
-          jq -n --arg model "llama-3.3-70b-versatile" --arg sys "Kamu adalah expert Flutter/Dart/Android build engineer. Jawab singkat, padat, fokus, dalam Bahasa Indonesia. Maks 250 kata." --arg user "$P" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:800, temperature:0.3}' > /tmp/payload.json
+          # ─── Payload Groq ───
+          jq -n \
+            --arg model "llama-3.3-70b-versatile" \
+            --arg sys "Kamu expert Flutter/Dart/Android build engineer. Jawab singkat, padat, dalam Bahasa Indonesia. Maks 250 kata." \
+            --arg user "$P" \
+            '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:800, temperature:0.3}' \
+            > /tmp/payload.json
 
-          RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" -H "Content-Type: application/json" -H "Authorization: Bearer $GROQ_API_KEY" --data @/tmp/payload.json)
+          # ─── Call Groq ───
+          RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${GROQ_API_KEY}" \
+            --data @/tmp/payload.json)
 
           AI_ANSWER=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
 
           if [ -z "$AI_ANSWER" ]; then
-            API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
+            API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null || true)
             if [ -n "$API_ERROR" ]; then
-              AI_ANSWER="❌ Groq API Error: $API_ERROR"
+              AI_ANSWER="Groq API Error: $API_ERROR"
             else
-              AI_ANSWER="❌ AI kosong. Cek GROQ_API_KEY / kuota Groq."
+              AI_ANSWER="AI kosong. Cek GROQ_API_KEY / kuota Groq."
             fi
           fi
 
           echo "==========================================="
-          echo "🤖 ANALISIS AI (Groq / Llama 3.3 70B):"
+          echo "ANALISIS AI (Groq / Llama 3.3 70B):"
           echo "==========================================="
           echo "$AI_ANSWER"
           echo "$AI_ANSWER" > "${GITHUB_WORKSPACE}/ai-analysis.txt"
 
           {
-            echo "## 🤖 Analisis AI (Groq / Llama 3.3 70B)"
+            echo "## Analisis AI (Groq / Llama 3.3 70B)"
             echo ""
-            echo "- Flutter: ${{ steps.detect.outputs.flutter || 'stable' }}"
-            echo "- Dart: ${{ steps.detect.outputs.dart_full || '-' }}"
-            echo "- Build: ${{ inputs.build_type || 'debug' }}"
+            echo "- Flutter: ${FLUTTER_VER:-stable}"
+            echo "- Dart: ${DART_FULL:--}"
+            echo "- Build: ${BUILD_TYPE:-debug}"
+            echo "- Source: ${SOURCE:-unknown}"
             echo ""
             echo "$AI_ANSWER"
           } >> $GITHUB_STEP_SUMMARY
 
-      # ─────────────────────────────────────────────
-      # 11. UPLOAD ARTIFACTS
-      # ─────────────────────────────────────────────
-      - name: 📤 Upload APK
-        if: steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-${{ inputs.tag }}
-          path: ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/*.apk
-          retention-days: 7
+          echo "AI analysis selesai"
 
-      - name: 📤 Upload AI Analysis
+      - name: Upload AI Analysis
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-analysis-${{ inputs.tag }}
+          name: ai-analysis-${{ github.event.inputs.tag }}
           path: ${{ github.workspace }}/ai-analysis.txt
           if-no-files-found: warn
           retention-days: 3
 
-      - name: 📤 Upload Build Log
+      - name: Upload build.log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ inputs.tag }}
+          name: build-log-${{ github.event.inputs.tag }}
           path: ${{ github.workspace }}/build.log
           if-no-files-found: warn
           retention-days: 3
