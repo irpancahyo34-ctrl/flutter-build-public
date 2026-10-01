@@ -245,7 +245,7 @@ jobs:
           cache: true
 
       # ══════════════════════════════════════════════
-      # 8. AUTO-FIX GRADLE + AGP + KOTLIN
+      # 8. AUTO-FIX GRADLE + AGP + KOTLIN (GUDANG VERSI)
       # ══════════════════════════════════════════════
       - name: 🛠️ Auto-fix Android toolchain versions
         id: android_fix
@@ -322,6 +322,8 @@ jobs:
             echo "📝 Sebelum: $(grep distributionUrl $WRAPPER)"
             sed -i "s|gradle-[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?-\(all\|bin\).zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER"
             echo "✅ Sesudah: $(grep distributionUrl $WRAPPER)"
+          else
+            echo "⚠️ Wrapper tidak ditemukan"
           fi
 
           for SETTINGS in android/settings.gradle.kts android/settings.gradle; do
@@ -355,7 +357,7 @@ jobs:
           echo "✅ Semua toolchain Android sudah di-fix"
 
       # ══════════════════════════════════════════════
-      # 9. SETUP JAVA SESUAI KEBUTUHAN
+      # 9. SETUP JAVA SESUAI VERSI YANG DIBUTUHKAN
       # ══════════════════════════════════════════════
       - name: ☕ Setup Java (sesuai kebutuhan)
         if: steps.android_fix.outputs.jdk != '17'
@@ -365,7 +367,7 @@ jobs:
           java-version: ${{ steps.android_fix.outputs.jdk }}
 
       # ══════════════════════════════════════════════
-      # 10. FLUTTER PUB GET
+      # 10. FLUTTER PUB GET (dengan retry)
       # ══════════════════════════════════════════════
       - name: 📚 Flutter pub get
         id: pubget
@@ -373,8 +375,8 @@ jobs:
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
-          flutter --version 2>&1 | tee ${{ github.workspace }}/build.log
-          flutter pub get 2>&1 | tee -a ${{ github.workspace }}/build.log
+          flutter --version
+          flutter pub get
 
       - name: 🔄 Retry pub get (fallback)
         if: steps.pubget.outcome == 'failure'
@@ -386,7 +388,7 @@ jobs:
           git checkout stable || true
           git pull || true
           cd -
-          flutter pub get 2>&1 | tee -a ${{ github.workspace }}/build.log
+          flutter pub get
 
       # ══════════════════════════════════════════════
       # 11. BUILD APK
@@ -395,15 +397,15 @@ jobs:
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
+          # Skip validation supaya Gradle yang sudah kita fix langsung dipakai
           flutter build apk --${{ github.event.inputs.build_type }} \
-            --android-skip-build-dependency-validation 2>&1 | tee -a ${{ github.workspace }}/build.log || \
-          flutter build apk --${{ github.event.inputs.build_type }} 2>&1 | tee -a ${{ github.workspace }}/build.log
+            --android-skip-build-dependency-validation || \
+          flutter build apk --${{ github.event.inputs.build_type }}
 
       # ══════════════════════════════════════════════
       # 12. UPLOAD APK
       # ══════════════════════════════════════════════
       - name: 📤 Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ github.event.inputs.tag }}
@@ -414,7 +416,7 @@ jobs:
           retention-days: 7
 
       # ══════════════════════════════════════════════
-      # 13. AI ERROR ANALYZER
+      # 13. AI ERROR ANALYZER (BARU)
       # ══════════════════════════════════════════════
       - name: 🤖 AI Error Analyzer
         if: failure()
@@ -501,13 +503,13 @@ EOF
           echo "✅ AI analysis selesai"
 
       # ══════════════════════════════════════════════
-      # 14. UPLOAD AI ANALYSIS
+      # 14. UPLOAD AI ANALYSIS (BARU)
       # ══════════════════════════════════════════════
       - name: 📤 Upload AI Analysis
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ai-analysis-${{ github.event.inputs.tag }}
-          path: ${{ github.event.workspace }}/ai-analysis.txt
+          path: ${{ github.workspace }}/ai-analysis.txt
           if-no-files-found: warn
           retention-days: 3
