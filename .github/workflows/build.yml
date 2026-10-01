@@ -387,108 +387,208 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Auto-Fix pubspec.yaml
-        id: pubspec_fix
+      - name: Auto-Fix Config Files
+        id: config_fix
         if: failure()
         shell: bash
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           FLUTTER_VER: ${{ steps.detect.outputs.flutter }}
-          PUBSPEC_PATH: ${{ steps.detect.outputs.pubspec_path }}
+          ROOT: ${{ steps.detect.outputs.root }}
+          GRADLE_TARGET: ${{ steps.android_fix.outputs.gradle }}
+          AGP_TARGET: ${{ steps.android_fix.outputs.agp }}
+          KOTLIN_TARGET: ${{ steps.android_fix.outputs.kotlin }}
         run: |
           set -e
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
-          FIXED_DIR="${GITHUB_WORKSPACE}/pubspec-fixed"
+          FIXED_DIR="${GITHUB_WORKSPACE}/config-fixed"
           mkdir -p "$FIXED_DIR"
 
-          if [ -z "$PUBSPEC_PATH" ] || [ ! -f "$PUBSPEC_PATH" ]; then
-            echo "pubspec.yaml tidak ada, skip"
+          if [ ! -f "$LOG_FILE" ]; then
+            echo "build.log tidak ada, skip"
             exit 0
           fi
 
-          echo "Error apapun terdeteksi, generate pubspec baru"
+          IS_CONFIG_ERROR=false
+          ERROR_TYPE=""
 
-          PUBSPEC_CONTENT=$(cat "$PUBSPEC_PATH")
+          if grep -q -iE "gradle.{0,30}version|minimum supported gradle|gradle-wrapper" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="gradle"
+          elif grep -q -iE "android gradle plugin|agp.{0,20}version|com\.android\.tools\.build" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="agp"
+          elif grep -q -iE "kotlin.{0,20}version|kotlin-gradle-plugin" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="kotlin"
+          elif grep -q -iE "compileSdk|targetSdk|minSdk" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="sdk"
+          elif grep -q -iE "pubspec|dart sdk|sdk version|version solving|dependency|resolve|constraint" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="pubspec"
+          fi
+
+          if [ "$IS_CONFIG_ERROR" = false ]; then
+            echo "Error bukan config/versi, skip auto-fix"
+            exit 0
+          fi
+
+          echo "Error config terdeteksi: $ERROR_TYPE"
+
+          PUBSPEC="$ROOT/pubspec.yaml"
+          WRAPPER="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
+          BUILD_GRADLE="$ROOT/android/build.gradle"
+          BUILD_GRADLE_KTS="$ROOT/android/build.gradle.kts"
+          SETTINGS_GRADLE="$ROOT/android/settings.gradle"
+          SETTINGS_GRADLE_KTS="$ROOT/android/settings.gradle.kts"
+          APP_GRADLE="$ROOT/android/app/build.gradle"
+          APP_GRADLE_KTS="$ROOT/android/app/build.gradle.kts"
+
+          FIX_LIST=""
+
+          if [ "$ERROR_TYPE" = "pubspec" ] && [ -f "$PUBSPEC" ]; then
+            FIX_LIST="$FIX_LIST pubspec.yaml"
+          fi
+          if [ "$ERROR_TYPE" = "gradle" ] && [ -f "$WRAPPER" ]; then
+            FIX_LIST="$FIX_LIST android/gradle/wrapper/gradle-wrapper.properties"
+          fi
+          if [ "$ERROR_TYPE" = "agp" ] || [ "$ERROR_TYPE" = "kotlin" ]; then
+            [ -f "$BUILD_GRADLE" ] && FIX_LIST="$FIX_LIST android/build.gradle"
+            [ -f "$BUILD_GRADLE_KTS" ] && FIX_LIST="$FIX_LIST android/build.gradle.kts"
+            [ -f "$SETTINGS_GRADLE" ] && FIX_LIST="$FIX_LIST android/settings.gradle"
+            [ -f "$SETTINGS_GRADLE_KTS" ] && FIX_LIST="$FIX_LIST android/settings.gradle.kts"
+          fi
+          if [ "$ERROR_TYPE" = "sdk" ]; then
+            [ -f "$APP_GRADLE" ] && FIX_LIST="$FIX_LIST android/app/build.gradle"
+            [ -f "$APP_GRADLE_KTS" ] && FIX_LIST="$FIX_LIST android/app/build.gradle.kts"
+          fi
+
+          FIX_LIST=$(echo "$FIX_LIST" | xargs)
+          if [ -z "$FIX_LIST" ]; then
+            echo "Tidak ada file yang bisa di-fix"
+            exit 0
+          fi
+
+          echo "File yang akan di-fix: $FIX_LIST"
+
+          FILES_CONTENT=""
+          for rel in $FIX_LIST; do
+            full="$ROOT/$rel"
+            if [ -f "$full" ]; then
+              FILES_CONTENT="${FILES_CONTENT}
+===== FILE: $rel =====
+$(cat "$full")
+===== END FILE: $rel =====
+"
+            fi
+          done
 
           {
-            echo "Kamu expert Flutter developer. Tugas kamu: PERBAIKI pubspec.yaml berikut agar kompatibel dengan versi Flutter yang dipakai dan hilangkan error dependency."
+            echo "Kamu expert Flutter developer. Perbaiki file config berikut."
             echo ""
-            echo "VERSI FLUTTER YANG DIPAKAI: ${FLUTTER_VER}"
+            echo "VERSI FLUTTER: ${FLUTTER_VER}"
+            echo "TARGET GRADLE: ${GRADLE_TARGET}"
+            echo "TARGET AGP: ${AGP_TARGET}"
+            echo "TARGET KOTLIN: ${KOTLIN_TARGET}"
+            echo "JENIS ERROR: ${ERROR_TYPE}"
             echo ""
-            echo "ISI pubspec.yaml SAAT INI:"
-            echo "$PUBSPEC_CONTENT"
+            echo "FILE YANG HARUS DIPERBAIKI:"
+            echo "$FILES_CONTENT"
             echo ""
-            echo "ATURAN WAJIB:"
-            echo "Kembalikan HANYA isi pubspec.yaml yang sudah diperbaiki"
-            echo "JANGAN ada penjelasan, JANGAN ada markdown, JANGAN ada kode blok"
-            echo "Mulai langsung dari baris pertama (biasanya name:)"
-            echo "Perbaiki constraint sdk agar sesuai versi Flutter"
-            echo "JANGAN ubah nama package"
-            echo "JANGAN hapus dependency yang sudah ada"
-            echo "JANGAN hapus section apapun (flutter:, dev_dependencies:, dll)"
-            echo "Hanya naikkan atau turunkan versi dependency yang KONFLIK saja"
-            echo "Kalau ragu, biarkan saja"
-          } > /tmp/pubspec-prompt.txt
+            echo "ATURAN OUTPUT WAJIB:"
+            echo "Untuk SETIAP file, output dengan format ini:"
+            echo "===== FILE: nama/file ====="
+            echo "[isi lengkap file yang sudah diperbaiki]"
+            echo "===== END FILE ====="
+            echo ""
+            echo "JANGAN ada penjelasan, JANGAN ada markdown, JANGAN ada kode blok."
+            echo "Setiap file harus lengkap dari baris pertama sampai terakhir."
+            echo "Kalau tidak perlu ubah file, tetap tulis ulang isinya."
+          } > /tmp/config-prompt.txt
 
           jq -n \
             --arg model "openai/gpt-oss-120b" \
-            --arg sys "Kamu expert Flutter. Output kamu HARUS isi pubspec.yaml yang valid, tanpa penjelasan apapun. Mulai dari baris pertama name:" \
-            --rawfile user /tmp/pubspec-prompt.txt \
-            '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.2}' > /tmp/pubspec-payload.json
+            --arg sys "Kamu expert Flutter. Output dengan format ===== FILE: nama ===== ... ===== END FILE ===== untuk setiap file. Tanpa penjelasan tambahan." \
+            --rawfile user /tmp/config-prompt.txt \
+            '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:4000, temperature:0.2}' > /tmp/config-payload.json
 
           RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${GROQ_API_KEY}" \
-            --data @/tmp/pubspec-payload.json)
+            --data @/tmp/config-payload.json)
 
-          NEW_PUBSPEC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          AI_OUTPUT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
 
-          if [ -z "$NEW_PUBSPEC" ]; then
+          if [ -z "$AI_OUTPUT" ]; then
             API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null || true)
-            echo "Gagal generate pubspec: $API_ERROR"
+            echo "Gagal generate config: $API_ERROR"
             exit 0
           fi
 
-          NEW_PUBSPEC=$(echo "$NEW_PUBSPEC" | sed -E 's/^```ya?ml$//; s/^```$//' | sed '/^```/d')
+          AI_OUTPUT=$(echo "$AI_OUTPUT" | sed -E 's/^```[a-z]*$//; s/^```$//' | sed '/^```/d')
 
-          VALID=true
-          if ! echo "$NEW_PUBSPEC" | grep -q "^name:"; then VALID=false; fi
-          if ! echo "$NEW_PUBSPEC" | grep -q "^dependencies:"; then VALID=false; fi
-          OLD_LINES=$(echo "$PUBSPEC_CONTENT" | wc -l)
-          NEW_LINES=$(echo "$NEW_PUBSPEC" | wc -l)
-          if [ "$NEW_LINES" -lt $((OLD_LINES / 2)) ]; then VALID=false; fi
+          echo "$AI_OUTPUT" > /tmp/ai-output.txt
 
-          if [ "$VALID" = false ]; then
-            echo "Pubspec baru tidak valid"
+          python3 <<'PYEOF'
+import re, os, sys
+ROOT = os.environ.get("ROOT")
+FIXED_DIR = os.environ.get("FIXED_DIR", "/tmp/config-fixed")
+os.makedirs(FIXED_DIR, exist_ok=True)
+
+with open("/tmp/ai-output.txt") as f:
+    content = f.read()
+
+pattern = re.compile(r"===== FILE:\s*(.+?)\s*=====\s*\n(.*?)\n===== END FILE", re.DOTALL)
+matches = pattern.findall(content)
+
+saved = []
+for name, body in matches:
+    name = name.strip()
+    rel = name.replace("\\", "/").lstrip("/")
+    if ".." in rel.split("/"):
+        continue
+    dst = os.path.join(FIXED_DIR, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "w") as f:
+        f.write(body)
+    saved.append(rel)
+
+if not saved:
+    sys.exit(1)
+
+print("Saved files:", saved)
+PYEOF
+
+          if [ $? -ne 0 ]; then
+            echo "Gagal parse output AI"
             exit 0
           fi
-
-          echo "$NEW_PUBSPEC" > "$FIXED_DIR/pubspec.yaml"
-          echo "$PUBSPEC_CONTENT" > "$FIXED_DIR/pubspec-original.yaml"
 
           {
-            echo "File pubspec.yaml sudah diperbaiki otomatis oleh AI."
+            echo "File config sudah diperbaiki otomatis oleh AI."
+            echo ""
+            echo "JENIS ERROR: ${ERROR_TYPE}"
+            echo "VERSI FLUTTER: ${FLUTTER_VER}"
             echo ""
             echo "CARA PAKAI:"
-            echo "1. Download file pubspec-fixed.zip"
+            echo "1. Download config-fixed.zip"
             echo "2. Extract"
-            echo "3. Ganti file pubspec.yaml di project kamu"
-            echo "4. Jalankan: flutter pub get"
+            echo "3. Copy file ke project kamu (replace yang lama)"
+            echo "4. Jalankan: flutter clean && flutter pub get"
             echo "5. Build ulang dari bot"
-            echo ""
-            echo "VERSI FLUTTER: ${FLUTTER_VER}"
           } > "$FIXED_DIR/ARAHAN.txt"
 
           cd "${GITHUB_WORKSPACE}"
-          zip -r pubspec-fixed.zip pubspec-fixed/ > /dev/null
-          echo "pubspec-fixed.zip siap"
+          zip -r config-fixed.zip config-fixed/ > /dev/null
+          echo "config-fixed.zip siap"
 
-      - name: Upload pubspec-fixed
+      - name: Upload config-fixed
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: pubspec-fixed-${{ github.event.inputs.tag }}
-          path: ${{ github.workspace }}/pubspec-fixed.zip
+          name: config-fixed-${{ github.event.inputs.tag }}
+          path: ${{ github.workspace }}/config-fixed.zip
           if-no-files-found: ignore
           retention-days: 3
 
