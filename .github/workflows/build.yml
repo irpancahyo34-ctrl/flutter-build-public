@@ -277,7 +277,6 @@ jobs:
           # ══════════════════════════════════════════════
           # GUDANG VERSI: Flutter → Gradle + AGP + Kotlin + JDK
           # ══════════════════════════════════════════════
-          # Format: "flutter_mm gradle agp kotlin jdk"
           GUDANG="
             1.0  4.10.2  3.0.0   1.2.71   8
             1.12 4.10.2  3.5.0   1.3.50   8
@@ -313,7 +312,7 @@ jobs:
           fi
           echo "📋 Flutter major.minor: $FLUTTER_MM"
 
-          # Cari yang paling cocok (default terendah yang support)
+          # Cari yang paling cocok
           GRADLE="8.12"
           AGP="8.7.0"
           KOTLIN="2.1.0"
@@ -326,7 +325,6 @@ jobs:
             KT=$(echo "$line" | awk '{print $4}')
             JK=$(echo "$line" | awk '{print $5}')
 
-            # Cari yang paling mendekati (<=)
             if [ "$(printf '%s\n%s' "$FMM" "$FLUTTER_MM" | sort -V | tail -1)" = "$FLUTTER_MM" ]; then
               GRADLE="$GR"
               AGP="$AG"
@@ -341,9 +339,7 @@ jobs:
           echo "kotlin=$KOTLIN" >> $GITHUB_OUTPUT
           echo "jdk=$JDK" >> $GITHUB_OUTPUT
 
-          # ══════════════════════════════════════════════
           # FIX 1: gradle-wrapper.properties
-          # ══════════════════════════════════════════════
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
             echo "📝 Sebelum: $(grep distributionUrl $WRAPPER)"
@@ -353,45 +349,31 @@ jobs:
             echo "⚠️ Wrapper tidak ditemukan"
           fi
 
-          # ══════════════════════════════════════════════
           # FIX 2: settings.gradle.kts / .gradle (AGP + Kotlin)
-          # ══════════════════════════════════════════════
           for SETTINGS in android/settings.gradle.kts android/settings.gradle; do
             if [ -f "$SETTINGS" ]; then
               echo "📝 Patching $SETTINGS"
-              
-              # AGP
               sed -i -E "s|(id\(\"com\.android\.application\"\)\s+version\s+\")[^\"]+|\1${AGP}|g" "$SETTINGS"
               sed -i -E "s|(id\s+'com\.android\.application'\s+version\s+')[^']+|\1${AGP}|g" "$SETTINGS"
-              
-              # Kotlin
               sed -i -E "s|(id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\")[^\"]+|\1${KOTLIN}|g" "$SETTINGS"
               sed -i -E "s|(id\s+'org\.jetbrains\.kotlin\.android'\s+version\s+')[^']+|\1${KOTLIN}|g" "$SETTINGS"
-              
               echo "✅ Selesai patch $SETTINGS"
             fi
           done
 
-          # ══════════════════════════════════════════════
           # FIX 3: build.gradle.kts (AGP + Kotlin) di root android/
-          # ══════════════════════════════════════════════
           for BUILD in android/build.gradle.kts android/build.gradle; do
             if [ -f "$BUILD" ]; then
               echo "📝 Patching $BUILD"
-              
               sed -i -E "s|(com\.android\.tools\.build:gradle:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${AGP}|g" "$BUILD"
               sed -i -E "s|(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${KOTLIN}|g" "$BUILD"
-              
               echo "✅ Selesai patch $BUILD"
             fi
           done
 
-          # ══════════════════════════════════════════════
           # FIX 4: gradle.properties (JVM args, AndroidX)
-          # ══════════════════════════════════════════════
           GRADLE_PROPS="android/gradle.properties"
           if [ -f "$GRADLE_PROPS" ]; then
-            # Pastikan AndroidX enabled
             grep -q "android.useAndroidX" "$GRADLE_PROPS" || echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
             grep -q "android.enableJetifier" "$GRADLE_PROPS" || echo "android.enableJetifier=true" >> "$GRADLE_PROPS"
             grep -q "org.gradle.jvmargs" "$GRADLE_PROPS" || echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G" >> "$GRADLE_PROPS"
@@ -419,8 +401,8 @@ jobs:
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
-          flutter --version
-          flutter pub get
+          flutter --version 2>&1 | tee ${{ github.workspace }}/build.log
+          flutter pub get 2>&1 | tee -a ${{ github.workspace }}/build.log
 
       - name: 🔄 Retry pub get (fallback)
         if: steps.pubget.outcome == 'failure'
@@ -432,7 +414,7 @@ jobs:
           git checkout stable || true
           git pull || true
           cd -
-          flutter pub get
+          flutter pub get 2>&1 | tee -a ${{ github.workspace }}/build.log
 
       # ══════════════════════════════════════════════
       # 11. BUILD APK
@@ -441,15 +423,15 @@ jobs:
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
-          # Skip validation supaya Gradle yang sudah kita fix langsung dipakai
           flutter build apk --${{ github.event.inputs.build_type }} \
-            --android-skip-build-dependency-validation || \
-          flutter build apk --${{ github.event.inputs.build_type }}
+            --android-skip-build-dependency-validation 2>&1 | tee -a ${{ github.workspace }}/build.log || \
+          flutter build apk --${{ github.event.inputs.build_type }} 2>&1 | tee -a ${{ github.workspace }}/build.log
 
       # ══════════════════════════════════════════════
       # 12. UPLOAD APK
       # ══════════════════════════════════════════════
       - name: 📤 Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ github.event.inputs.tag }}
@@ -458,3 +440,104 @@ jobs:
             ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: warn
           retention-days: 7
+
+      # ══════════════════════════════════════════════
+      # 13. AI ERROR ANALYZER (BARU)
+      # ══════════════════════════════════════════════
+      - name: 🤖 AI Error Analyzer
+        if: failure()
+        shell: bash
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TAG: ${{ github.event.inputs.tag }}
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          echo "🤖 AI Error Analyzer dimulai..."
+          
+          LOG_FILE="${{ github.workspace }}/build.log"
+          if [ ! -f "$LOG_FILE" ]; then
+            echo "⚠️ build.log tidak ada, skip AI"; exit 0
+          fi
+
+          RAW_LOG=$(cat "$LOG_FILE")
+          FILTERED=$(echo "$RAW_LOG" \
+            | grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required" \
+            | head -60 || true)
+          if [ $(echo "$FILTERED" | wc -l) -lt 5 ]; then
+            FILTERED=$(echo "$RAW_LOG" | tail -200)
+          fi
+          FILTERED=$(echo "$FILTERED" | head -c 15000)
+
+          PROMPT=$(cat <<EOF
+Kamu adalah expert DevOps & Flutter developer. Analisis log error build Flutter berikut.
+
+KONTEKS:
+- Build type: $BUILD_TYPE
+- Tag: $TAG
+
+LOG ERROR:
+\`\`\`
+$FILTERED
+\`\`\`
+
+Berikan analisis SINGKAT dalam BAHASA INDONESIA:
+
+🔴 **MASALAH UTAMA**:
+📌 **PENYEBAB**:
+✅ **SOLUSI**:
+💡 **CEGAH TERULANG**:
+
+Maksimal 350 kata.
+EOF
+          )
+          PROMPT_JSON=$(echo "$PROMPT" | jq -Rs .)
+
+          RESPONSE=$(curl -s -X POST \
+            "https://api.deepseek.com/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" \
+            -d "{
+              \"model\": \"deepseek-chat\",
+              \"messages\": [
+                {\"role\": \"system\", \"content\": \"Kamu expert Flutter & DevOps. Jawab singkat dalam Bahasa Indonesia.\"},
+                {\"role\": \"user\", \"content\": $PROMPT_JSON}
+              ],
+              \"max_tokens\": 800,
+              \"temperature\": 0.3
+            }")
+
+          AI_ANSWER=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "AI tidak memberi jawaban"')
+
+          echo "═══════════════════════════════════════════"
+          echo "🤖 ANALISIS AI (DeepSeek):"
+          echo "═══════════════════════════════════════════"
+          echo "$AI_ANSWER"
+          echo "═══════════════════════════════════════════"
+
+          {
+            echo "$AI_ANSWER"
+          } > ${{ github.workspace }}/ai-analysis.txt
+
+          {
+            echo "## ❌ Build Gagal"
+            echo ""
+            echo "### 🤖 Analisis AI (DeepSeek)"
+            echo ""
+            echo "$AI_ANSWER"
+          } >> $GITHUB_STEP_SUMMARY
+
+          echo "✅ AI analysis selesai"
+
+      # ══════════════════════════════════════════════
+      # 14. UPLOAD AI ANALYSIS
+      # ══════════════════════════════════════════════
+      - name: 📤 Upload AI Analysis
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-analysis-${{ github.event.inputs.tag }}
+          path: ${{ github.workspace }}/ai-analysis.txt
+          if-no-files-found: warn
+          retention-days: 3
