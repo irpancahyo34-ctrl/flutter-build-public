@@ -323,37 +323,22 @@ jobs:
             FILTERED="Tidak ada build.log. Kemungkinan gagal di tahap awal."
           fi
           FILTERED=$(echo "$FILTERED" | head -c 15000 || true)
-          USER_PROMPT=$(cat <<'PROMPT_EOF'
-Analisis error build Flutter berikut.
-
-KONTEKS:
-- Build type: BUILD_TYPE_PLACEHOLDER
-- Tag: TAG_PLACEHOLDER
-- Flutter terdeteksi: FLUTTER_PLACEHOLDER
-- Dart constraint: DART_PLACEHOLDER
-- Run URL: URL_PLACEHOLDER
-
-LOG ERROR:
-FILTERED_PLACEHOLDER
-
-Berikan analisis dalam BAHASA INDONESIA dengan format:
-
-1. MASALAH UTAMA:
-2. PENYEBAB:
-3. SOLUSI KONKRET:
-4. CEGAH TERULANG:
-5. VERSI FLUTTER YANG DISARANKAN:
-
-Maksimal 500 kata.
-PROMPT_EOF
-)
-          USER_PROMPT="${USER_PROMPT//BUILD_TYPE_PLACEHOLDER/$BUILD_TYPE}"
-          USER_PROMPT="${USER_PROMPT//TAG_PLACEHOLDER/$TAG}"
-          USER_PROMPT="${USER_PROMPT//FLUTTER_PLACEHOLDER/$FLUTTER_VER}"
-          USER_PROMPT="${USER_PROMPT//DART_PLACEHOLDER/$DART_FULL}"
-          USER_PROMPT="${USER_PROMPT//URL_PLACEHOLDER/$RUN_URL}"
-          USER_PROMPT="${USER_PROMPT//FILTERED_PLACEHOLDER/$FILTERED}"
-          jq -n --arg model "deepseek-chat" --arg sys "Kamu expert Flutter & DevOps." --arg user "$USER_PROMPT" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:1200, temperature:0.3}' > /tmp/payload.json
+          PROMPT_TEXT="Analisis error build Flutter berikut."
+          PROMPT_TEXT="${PROMPT_TEXT}\n\nKONTEKS:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n- Build type: ${BUILD_TYPE}"
+          PROMPT_TEXT="${PROMPT_TEXT}\n- Tag: ${TAG}"
+          PROMPT_TEXT="${PROMPT_TEXT}\n- Flutter terdeteksi: ${FLUTTER_VER}"
+          PROMPT_TEXT="${PROMPT_TEXT}\n- Dart constraint: ${DART_FULL} (minor: ${DART_MINOR})"
+          PROMPT_TEXT="${PROMPT_TEXT}\n- Run URL: ${RUN_URL}"
+          PROMPT_TEXT="${PROMPT_TEXT}\n\nLOG ERROR:\n${FILTERED}"
+          PROMPT_TEXT="${PROMPT_TEXT}\n\nBerikan analisis dalam BAHASA INDONESIA dengan format:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n\n1. MASALAH UTAMA:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n2. PENYEBAB:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n3. SOLUSI KONKRET:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n4. CEGAH TERULANG:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n5. VERSI FLUTTER YANG DISARANKAN:"
+          PROMPT_TEXT="${PROMPT_TEXT}\n\nMaksimal 500 kata."
+          jq -n --arg model "deepseek-chat" --arg sys "Kamu expert Flutter & DevOps." --arg user "$PROMPT_TEXT" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:1200, temperature:0.3}' > /tmp/payload.json
           RESPONSE=$(curl -s -X POST "https://api.deepseek.com/chat/completions" -H "Content-Type: application/json" -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" --data @/tmp/payload.json)
           AI_ANSWER=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "AI tidak memberi jawaban"' || echo "AI error")
           echo "==========================================="
