@@ -83,13 +83,16 @@ jobs:
           echo "=== Isi source ==="
           ls -la source/
 
-      - name: ☕ Setup Java 17
+      - name: ☕ Setup Java 17 (default)
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: 🔍 Detect Flutter version
+      # ═══════════════════════════════════════════════════════════
+      # 🧠 DETEKSI VERSI FLUTTER DARI BANYAK SUMBER
+      # ═══════════════════════════════════════════════════════════
+      - name: 🔍 Detect Flutter version (multi-source)
         id: detect
         shell: bash
         run: |
@@ -103,100 +106,99 @@ jobs:
           echo "root=$ROOT" >> $GITHUB_OUTPUT
           echo "✅ Project root: $ROOT"
 
+          FLUTTER_VER=""
+          SOURCE=""
+
+          # ── 1. Cek .fvmrc (paling akurat) ──
           if [ -f "$ROOT/.fvmrc" ]; then
+            echo "🔎 Cek .fvmrc..."
             FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" \
-                      | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+                      | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
             if [ -n "$FVM_VER" ]; then
-              echo "🎯 [.fvmrc] Flutter: $FVM_VER"
-              echo "flutter=$FVM_VER" >> $GITHUB_OUTPUT
-              echo "source=manual" >> $GITHUB_OUTPUT
-              exit 0
+              FLUTTER_VER="$FVM_VER"
+              SOURCE=".fvmrc"
             fi
           fi
 
-          FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" \
-               | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
-          if [ -n "$FV" ] && [ "$FV" != "null" ]; then
-            echo "🎯 [pubspec flutter_version] Flutter: $FV"
-            echo "flutter=$FV" >> $GITHUB_OUTPUT
-            echo "source=manual" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" \
-                            | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
-          echo "📋 [pubspec.yaml] Dart constraint: $DART_CONSTRAINT"
-          DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-          echo "📋 Dart minor: $DART_MINOR"
-
-          if [ -z "$DART_MINOR" ] && [ -f "$ROOT/pubspec.lock" ]; then
-            DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" \
-                         | grep -E '^\s*dart\s*:' \
-                         | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-            echo "📋 [pubspec.lock fallback] Dart: $DART_MINOR"
-          fi
-
-          MAPPING="
-            2.0  1.0.0
-            2.1  1.12.13
-            2.2  1.17.0
-            2.3  1.20.0
-            2.4  1.22.0
-            2.5  2.0.0
-            2.7  2.2.0
-            2.8  2.5.0
-            2.9  2.8.0
-            2.10 2.10.0
-            2.12 2.0.0
-            2.13 2.2.0
-            2.14 2.5.0
-            2.15 2.8.0
-            2.16 2.10.0
-            2.17 3.0.0
-            2.18 3.3.0
-            2.19 3.7.0
-            3.0  3.10.0
-            3.1  3.13.0
-            3.2  3.16.0
-            3.3  3.19.0
-            3.4  3.22.0
-            3.5  3.24.0
-            3.6  3.27.0
-            3.7  3.29.0
-            3.8  3.32.0
-            3.9  3.35.0
-            3.10 3.35.0
-            3.11 3.35.0
-            3.12 3.35.0
-            3.13 3.35.0
-          "
-
-          FLUTTER=""
-          for line in $MAPPING; do
-            DM=$(echo "$line" | awk '{print $1}')
-            FV=$(echo "$line" | awk '{print $2}')
-            if [ "$DM" = "$DART_MINOR" ]; then
-              FLUTTER="$FV"
-              break
+          # ── 2. Cek pubspec.yaml → flutter_version ──
+          if [ -z "$FLUTTER_VER" ]; then
+            echo "🔎 Cek pubspec.yaml flutter_version..."
+            FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" \
+                 | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
+            if [ -n "$FV" ] && [ "$FV" != "null" ]; then
+              FLUTTER_VER="$FV"
+              SOURCE="pubspec.yaml:flutter_version"
             fi
-          done
-
-          if [ -z "$FLUTTER" ]; then
-            echo "⚠️ Dart minor '$DART_MINOR' tidak ada di mapping, fallback stable"
-            FLUTTER="stable"
           fi
 
-          echo "🎯 Flutter dipilih: $FLUTTER"
-          echo "flutter=$FLUTTER" >> $GITHUB_OUTPUT
-          echo "source=auto" >> $GITHUB_OUTPUT
+          # ── 3. Cek pubspec.yaml → environment.flutter ──
+          if [ -z "$FLUTTER_VER" ]; then
+            echo "🔎 Cek pubspec.yaml environment.flutter..."
+            FENV=$(grep -E '^\s*flutter\s*:' "$ROOT/pubspec.yaml" | head -1 \
+                   | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+            if [ -n "$FENV" ]; then
+              FLUTTER_VER="$FENV"
+              SOURCE="pubspec.yaml:environment.flutter"
+            fi
+          fi
 
+          # ── 4. Fallback: deteksi dari Dart constraint ──
+          if [ -z "$FLUTTER_VER" ]; then
+            echo "🔎 Cek Dart constraint di pubspec.yaml..."
+            DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" \
+                              | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
+            DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
+            echo "📋 Dart minor: $DART_MINOR"
+
+            # Kalau gak ada, ambil dari pubspec.lock
+            if [ -z "$DART_MINOR" ] && [ -f "$ROOT/pubspec.lock" ]; then
+              DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" \
+                           | grep -E '^\s*dart\s*:' \
+                           | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
+              echo "📋 [pubspec.lock] Dart: $DART_MINOR"
+            fi
+
+            # Mapping Dart → Flutter
+            MAPPING="2.0:1.0.0 2.1:1.12.13 2.2:1.17.0 2.3:1.20.0 2.4:1.22.0 \
+                     2.5:2.0.0 2.7:2.2.0 2.8:2.5.0 2.9:2.8.0 2.10:2.10.0 \
+                     2.12:2.0.0 2.13:2.2.0 2.14:2.5.0 2.15:2.8.0 2.16:2.10.0 \
+                     2.17:3.0.0 2.18:3.3.0 2.19:3.7.0 3.0:3.10.0 3.1:3.13.0 \
+                     3.2:3.16.0 3.3:3.19.0 3.4:3.22.0 3.5:3.24.0 3.6:3.27.0 \
+                     3.7:3.29.0 3.8:3.32.0 3.9:3.35.0 3.10:3.35.0 3.11:3.35.0 \
+                     3.12:3.35.0 3.13:3.35.0"
+
+            for pair in $MAPPING; do
+              DM="${pair%%:*}"
+              FV="${pair##*:}"
+              if [ "$DM" = "$DART_MINOR" ]; then
+                FLUTTER_VER="$FV"
+                SOURCE="dart-mapping:$DART_MINOR"
+                break
+              fi
+            done
+          fi
+
+          # ── 5. Fallback terakhir ──
+          if [ -z "$FLUTTER_VER" ]; then
+            echo "⚠️ Tidak bisa deteksi versi, fallback ke stable"
+            FLUTTER_VER="stable"
+            SOURCE="fallback"
+          fi
+
+          echo "🎯 Flutter version: $FLUTTER_VER (dari: $SOURCE)"
+          echo "flutter=$FLUTTER_VER" >> $GITHUB_OUTPUT
+          echo "source=$SOURCE" >> $GITHUB_OUTPUT
+
+      # ═══════════════════════════════════════════════════════════
+      # ✔️ VALIDASI: cek versi ke server Flutter
+      # ═══════════════════════════════════════════════════════════
       - name: ✔️ Validate Flutter Version
         id: validate
         shell: bash
         run: |
           set -e
           VER="${{ steps.detect.outputs.flutter }}"
-          echo "🔍 Cek versi: $VER"
+          echo "🔍 Validasi versi: $VER"
           if [ "$VER" = "stable" ]; then
             echo "✅ Pakai channel stable"
             echo "flutter=stable" >> $GITHUB_OUTPUT
@@ -205,84 +207,73 @@ jobs:
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
           if [ "$HTTP" != "200" ]; then
-            echo "❌ Flutter $VER tidak valid (HTTP $HTTP)"
-            echo "❌ Fallback ke stable"
+            echo "❌ Flutter $VER tidak valid (HTTP $HTTP), fallback stable"
             echo "flutter=stable" >> $GITHUB_OUTPUT
           else
             echo "✅ Flutter $VER valid"
             echo "flutter=$VER" >> $GITHUB_OUTPUT
           fi
 
-      - name: 🐦 Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ steps.validate.outputs.flutter }}
-          channel: 'stable'
-          cache: true
+      # ═══════════════════════════════════════════════════════════
+      # 🐦 INSTALL FLUTTER (manual clone, anti error)
+      # ═══════════════════════════════════════════════════════════
+      - name: 🐦 Install Flutter (manual)
+        id: flutter_install
+        shell: bash
+        run: |
+          set -e
+          VER="${{ steps.validate.outputs.flutter }}"
+          echo "🐦 Installing Flutter: $VER"
+          if [ "$VER" = "stable" ]; then
+            git clone --depth 1 -b stable https://github.com/flutter/flutter.git /opt/flutter
+          else
+            git clone --depth 1 -b "$VER" https://github.com/flutter/flutter.git /opt/flutter
+          fi
+          echo "/opt/flutter/bin" >> $GITHUB_PATH
+          echo "✅ Flutter cloned"
 
+      - name: 🐦 Flutter doctor & version
+        shell: bash
+        run: |
+          set -e
+          flutter --version
+          flutter config --no-analytics || true
+          flutter doctor -v || true
+
+      # ═══════════════════════════════════════════════════════════
+      # 🛠️ AUTO-FIX ANDROID TOOLCHAIN
+      # ═══════════════════════════════════════════════════════════
       - name: 🛠️ Auto-fix Android toolchain versions
         id: android_fix
         shell: bash
         working-directory: ${{ steps.detect.outputs.root }}
         run: |
           set -e
-          FLUTTER_VER="${{ steps.validate.outputs.flutter }}"
-          echo "🎯 Flutter version: $FLUTTER_VER"
-
-          GUDANG="
-            1.0  4.10.2  3.0.0   1.2.71   8
-            1.12 4.10.2  3.5.0   1.3.50   8
-            1.17 5.6.4   3.6.4   1.3.72   8
-            1.20 6.1.1   4.0.1   1.3.72   8
-            1.22 6.7     4.1.0   1.4.32   8
-            2.0  6.7     4.1.0   1.4.32   8
-            2.2  6.7     4.1.0   1.5.31   8
-            2.5  6.7     4.1.0   1.5.31   8
-            2.8  6.7     4.2.0   1.6.10   8
-            2.10 6.7     4.2.0   1.6.10   8
-            3.0  7.5     7.4.2   1.7.10   11
-            3.3  7.5     7.4.2   1.7.10   11
-            3.7  7.5     7.4.2   1.7.10   11
-            3.10 8.0     8.0.2   1.8.0    17
-            3.13 8.1.0   8.1.0   1.8.0    17
-            3.16 8.3     8.1.1   1.8.22   17
-            3.19 8.3     8.2.1   1.8.22   17
-            3.22 8.4     8.3.0   1.9.22   17
-            3.24 8.6     8.3.0   1.9.24   17
-            3.27 8.9     8.6.0   2.0.20   17
-            3.29 8.10    8.7.0   2.0.21   17
-            3.32 8.12    8.7.0   2.1.0    17
-            3.35 8.14    8.7.0   2.1.0    17
-            3.47 8.14    8.9.1   2.1.10   17
-          "
-
-          if [ "$FLUTTER_VER" = "stable" ]; then
-            FLUTTER_MM="3.35"
-          else
-            FLUTTER_MM=$(echo "$FLUTTER_VER" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
-          fi
+          FLUTTER_REAL=$(flutter --version | head -1 | awk '{print $2}')
+          echo "🎯 Flutter real version: $FLUTTER_REAL"
+          FLUTTER_MM=$(echo "$FLUTTER_REAL" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
           echo "📋 Flutter major.minor: $FLUTTER_MM"
 
-          GRADLE="8.12"
-          AGP="8.7.0"
-          KOTLIN="2.1.0"
-          JDK="17"
+          GUDANG="3.0:7.5:7.4.2:1.7.10:11 3.3:7.5:7.4.2:1.7.10:11 3.7:7.5:7.4.2:1.7.10:11 \
+                  3.10:8.0:8.0.2:1.8.0:17 3.13:8.1.0:8.1.0:1.8.0:17 3.16:8.3:8.1.1:1.8.22:17 \
+                  3.19:8.3:8.2.1:1.8.22:17 3.22:8.4:8.3.0:1.9.22:17 3.24:8.6:8.3.0:1.9.24:17 \
+                  3.27:8.9:8.6.0:2.0.20:17 3.29:8.10:8.7.0:2.0.21:17 3.32:8.12:8.7.0:2.1.0:17 \
+                  3.35:8.14:8.7.0:2.1.0:17 3.47:8.14:8.9.1:2.1.10:17"
 
-          for line in $GUDANG; do
-            FMM=$(echo "$line" | awk '{print $1}')
-            GR=$(echo "$line" | awk '{print $2}')
-            AG=$(echo "$line" | awk '{print $3}')
-            KT=$(echo "$line" | awk '{print $4}')
-            JK=$(echo "$line" | awk '{print $5}')
+          GRADLE="8.12"; AGP="8.7.0"; KOTLIN="2.1.0"; JDK="17"
+
+          for pair in $GUDANG; do
+            FMM=$(echo "$pair" | cut -d: -f1)
+            GR=$(echo "$pair" | cut -d: -f2)
+            AG=$(echo "$pair" | cut -d: -f3)
+            KT=$(echo "$pair" | cut -d: -f4)
+            JK=$(echo "$pair" | cut -d: -f5)
             if [ "$(printf '%s\n%s' "$FMM" "$FLUTTER_MM" | sort -V | tail -1)" = "$FLUTTER_MM" ]; then
-              GRADLE="$GR"
-              AGP="$AG"
-              KOTLIN="$KT"
-              JDK="$JK"
+              GRADLE="$GR"; AGP="$AG"; KOTLIN="$KT"; JDK="$JK"
             fi
           done
 
-          echo "✅ Toolchain dipilih: Gradle=$GRADLE, AGP=$AGP, Kotlin=$KOTLIN, JDK=$JDK"
+          echo "✅ Toolchain: Gradle=$GRADLE AGP=$AGP Kotlin=$KOTLIN JDK=$JDK"
           echo "gradle=$GRADLE" >> $GITHUB_OUTPUT
           echo "agp=$AGP" >> $GITHUB_OUTPUT
           echo "kotlin=$KOTLIN" >> $GITHUB_OUTPUT
@@ -290,30 +281,23 @@ jobs:
 
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
-            echo "📝 Sebelum: $(grep distributionUrl $WRAPPER)"
             sed -i "s|gradle-[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?-\(all\|bin\).zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER"
-            echo "✅ Sesudah: $(grep distributionUrl $WRAPPER)"
-          else
-            echo "⚠️ Wrapper tidak ditemukan"
+            echo "✅ Wrapper: $(grep distributionUrl $WRAPPER)"
           fi
 
           for SETTINGS in android/settings.gradle.kts android/settings.gradle; do
             if [ -f "$SETTINGS" ]; then
-              echo "📝 Patching $SETTINGS"
               sed -i -E "s|(id\(\"com\.android\.application\"\)\s+version\s+\")[^\"]+|\1${AGP}|g" "$SETTINGS"
               sed -i -E "s|(id\s+'com\.android\.application'\s+version\s+')[^']+|\1${AGP}|g" "$SETTINGS"
               sed -i -E "s|(id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\")[^\"]+|\1${KOTLIN}|g" "$SETTINGS"
               sed -i -E "s|(id\s+'org\.jetbrains\.kotlin\.android'\s+version\s+')[^']+|\1${KOTLIN}|g" "$SETTINGS"
-              echo "✅ Selesai patch $SETTINGS"
             fi
           done
 
           for BUILD in android/build.gradle.kts android/build.gradle; do
             if [ -f "$BUILD" ]; then
-              echo "📝 Patching $BUILD"
               sed -i -E "s|(com\.android\.tools\.build:gradle:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${AGP}|g" "$BUILD"
               sed -i -E "s|(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${KOTLIN}|g" "$BUILD"
-              echo "✅ Selesai patch $BUILD"
             fi
           done
 
@@ -322,17 +306,22 @@ jobs:
             grep -q "android.useAndroidX" "$GRADLE_PROPS" || echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
             grep -q "android.enableJetifier" "$GRADLE_PROPS" || echo "android.enableJetifier=true" >> "$GRADLE_PROPS"
             grep -q "org.gradle.jvmargs" "$GRADLE_PROPS" || echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G" >> "$GRADLE_PROPS"
-            echo "✅ gradle.properties di-patch"
           fi
-          echo "✅ Semua toolchain Android sudah di-fix"
+          echo "✅ Toolchain fix selesai"
 
-      - name: ☕ Setup Java (sesuai kebutuhan)
+      # ═══════════════════════════════════════════════════════════
+      # 🔄 SETUP JAVA sesuai kebutuhan versi Flutter
+      # ═══════════════════════════════════════════════════════════
+      - name: ☕ Setup Java (sesuai kebutuhan Flutter)
         if: steps.android_fix.outputs.jdk != '17'
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: ${{ steps.android_fix.outputs.jdk }}
 
+      # ═══════════════════════════════════════════════════════════
+      # 📚 PUB GET
+      # ═══════════════════════════════════════════════════════════
       - name: 📚 Flutter pub get
         id: pubget
         continue-on-error: true
@@ -347,23 +336,23 @@ jobs:
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
-          echo "⚠️ pub get gagal, coba dengan Flutter stable terbaru"
-          cd $FLUTTER_ROOT
-          git checkout stable || true
-          git pull || true
-          cd -
+          echo "⚠️ pub get gagal, coba ulang"
           flutter pub get
 
+      # ═══════════════════════════════════════════════════════════
+      # 🏗️ BUILD APK
+      # ═══════════════════════════════════════════════════════════
       - name: 🏗️ Flutter build APK
         id: build_apk
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
           set -o pipefail
-          # Simpan log ke build.log agar bisa dibaca AI Analyzer
-          flutter build apk --${{ github.event.inputs.build_type }} \
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          if [ -z "$BUILD_TYPE" ]; then BUILD_TYPE="debug"; fi
+          flutter build apk --$BUILD_TYPE \
             --android-skip-build-dependency-validation 2>&1 | tee "${{ github.workspace }}/build.log" || \
-          flutter build apk --${{ github.event.inputs.build_type }} 2>&1 | tee -a "${{ github.workspace }}/build.log"
+          flutter build apk --$BUILD_TYPE 2>&1 | tee -a "${{ github.workspace }}/build.log"
 
       - name: 📤 Upload APK
         uses: actions/upload-artifact@v4
@@ -375,6 +364,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # ═══════════════════════════════════════════════════════════
+      # 🤖 AI ERROR ANALYZER
+      # ═══════════════════════════════════════════════════════════
       - name: 🤖 AI Error Analyzer
         if: failure()
         shell: bash
@@ -396,7 +388,6 @@ jobs:
           fi
           FILTERED=$(echo "$FILTERED" | head -c 15000)
 
-          # Gunakan Heredoc (EOF) agar teks panjang tidak merusak indentasi YAML
           USER_PROMPT=$(cat <<EOF
           Analisis error build Flutter berikut.
 
@@ -436,7 +427,6 @@ jobs:
           echo "🤖 ANALISIS AI (DeepSeek):"
           echo "═══════════════════════════════════════════"
           echo "$AI_ANSWER"
-          echo "═══════════════════════════════════════════"
           echo "$AI_ANSWER" > ${{ github.workspace }}/ai-analysis.txt
           {
             echo "## ❌ Build Gagal"
