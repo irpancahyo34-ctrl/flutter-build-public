@@ -394,10 +394,8 @@ jobs:
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           FLUTTER_VER: ${{ steps.detect.outputs.flutter }}
+          PUBSPEC_PATH: ${{ steps.detect.outputs.pubspec_path }}
           ROOT: ${{ steps.detect.outputs.root }}
-          GRADLE_TARGET: ${{ steps.android_fix.outputs.gradle }}
-          AGP_TARGET: ${{ steps.android_fix.outputs.agp }}
-          KOTLIN_TARGET: ${{ steps.android_fix.outputs.kotlin }}
         run: |
           set -e
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
@@ -410,173 +408,115 @@ jobs:
           fi
 
           IS_CONFIG_ERROR=false
-          ERROR_TYPE=""
+          ERROR_TYPE="unknown"
 
-          if grep -q -iE "gradle.{0,30}version|minimum supported gradle|gradle-wrapper" "$LOG_FILE"; then
-            IS_CONFIG_ERROR=true
-            ERROR_TYPE="gradle"
-          elif grep -q -iE "android gradle plugin|agp.{0,20}version|com\.android\.tools\.build" "$LOG_FILE"; then
-            IS_CONFIG_ERROR=true
-            ERROR_TYPE="agp"
-          elif grep -q -iE "kotlin.{0,20}version|kotlin-gradle-plugin" "$LOG_FILE"; then
-            IS_CONFIG_ERROR=true
-            ERROR_TYPE="kotlin"
-          elif grep -q -iE "compileSdk|targetSdk|minSdk" "$LOG_FILE"; then
-            IS_CONFIG_ERROR=true
-            ERROR_TYPE="sdk"
-          elif grep -q -iE "pubspec|dart sdk|sdk version|version solving|dependency|resolve|constraint" "$LOG_FILE"; then
+          if grep -q -iE "pubspec|dart sdk|sdk version|version solving|dependency|resolve|constraint" "$LOG_FILE"; then
             IS_CONFIG_ERROR=true
             ERROR_TYPE="pubspec"
           fi
 
+          if grep -q -iE "gradle|distributionUrl|gradle-wrapper" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="gradle"
+          fi
+
+          if grep -q -iE "android gradle plugin|agp|kotlin version|kotlin_version" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="agp-kotlin"
+          fi
+
+          if grep -q -iE "compileSdk|targetSdk|minSdk" "$LOG_FILE"; then
+            IS_CONFIG_ERROR=true
+            ERROR_TYPE="sdk-version"
+          fi
+
           if [ "$IS_CONFIG_ERROR" = false ]; then
-            echo "Error bukan config/versi, skip auto-fix"
+            echo "Bukan error config, skip"
             exit 0
           fi
 
           echo "Error config terdeteksi: $ERROR_TYPE"
+          echo "error_type=$ERROR_TYPE" >> $GITHUB_OUTPUT
 
-          PUBSPEC="$ROOT/pubspec.yaml"
-          WRAPPER="$ROOT/android/gradle/wrapper/gradle-wrapper.properties"
-          BUILD_GRADLE="$ROOT/android/build.gradle"
-          BUILD_GRADLE_KTS="$ROOT/android/build.gradle.kts"
-          SETTINGS_GRADLE="$ROOT/android/settings.gradle"
-          SETTINGS_GRADLE_KTS="$ROOT/android/settings.gradle.kts"
-          APP_GRADLE="$ROOT/android/app/build.gradle"
-          APP_GRADLE_KTS="$ROOT/android/app/build.gradle.kts"
+          mkdir -p "$FIXED_DIR/android/gradle/wrapper"
+          mkdir -p "$FIXED_DIR/android/app"
 
-          FIX_LIST=""
-
-          if [ "$ERROR_TYPE" = "pubspec" ] && [ -f "$PUBSPEC" ]; then
-            FIX_LIST="$FIX_LIST pubspec.yaml"
-          fi
-          if [ "$ERROR_TYPE" = "gradle" ] && [ -f "$WRAPPER" ]; then
-            FIX_LIST="$FIX_LIST android/gradle/wrapper/gradle-wrapper.properties"
-          fi
-          if [ "$ERROR_TYPE" = "agp" ] || [ "$ERROR_TYPE" = "kotlin" ]; then
-            [ -f "$BUILD_GRADLE" ] && FIX_LIST="$FIX_LIST android/build.gradle"
-            [ -f "$BUILD_GRADLE_KTS" ] && FIX_LIST="$FIX_LIST android/build.gradle.kts"
-            [ -f "$SETTINGS_GRADLE" ] && FIX_LIST="$FIX_LIST android/settings.gradle"
-            [ -f "$SETTINGS_GRADLE_KTS" ] && FIX_LIST="$FIX_LIST android/settings.gradle.kts"
-          fi
-          if [ "$ERROR_TYPE" = "sdk" ]; then
-            [ -f "$APP_GRADLE" ] && FIX_LIST="$FIX_LIST android/app/build.gradle"
-            [ -f "$APP_GRADLE_KTS" ] && FIX_LIST="$FIX_LIST android/app/build.gradle.kts"
+          if [ -f "$PUBSPEC_PATH" ]; then
+            cp "$PUBSPEC_PATH" "$FIXED_DIR/pubspec.yaml"
           fi
 
-          FIX_LIST=$(echo "$FIX_LIST" | xargs)
-          if [ -z "$FIX_LIST" ]; then
-            echo "Tidak ada file yang bisa di-fix"
-            exit 0
+          if [ -f "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" ]; then
+            cp "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" "$FIXED_DIR/android/gradle/wrapper/gradle-wrapper.properties"
           fi
 
-          echo "File yang akan di-fix: $FIX_LIST"
-
-          FILES_CONTENT=""
-          for rel in $FIX_LIST; do
-            full="$ROOT/$rel"
-            if [ -f "$full" ]; then
-              FILES_CONTENT="${FILES_CONTENT}
-===== FILE: $rel =====
-$(cat "$full")
-===== END FILE: $rel =====
-"
+          for BF in android/build.gradle android/build.gradle.kts android/settings.gradle android/settings.gradle.kts android/app/build.gradle android/app/build.gradle.kts; do
+            if [ -f "$ROOT/$BF" ]; then
+              mkdir -p "$(dirname "$FIXED_DIR/$BF")"
+              cp "$ROOT/$BF" "$FIXED_DIR/$BF"
             fi
           done
 
-          {
-            echo "Kamu expert Flutter developer. Perbaiki file config berikut."
-            echo ""
-            echo "VERSI FLUTTER: ${FLUTTER_VER}"
-            echo "TARGET GRADLE: ${GRADLE_TARGET}"
-            echo "TARGET AGP: ${AGP_TARGET}"
-            echo "TARGET KOTLIN: ${KOTLIN_TARGET}"
-            echo "JENIS ERROR: ${ERROR_TYPE}"
-            echo ""
-            echo "FILE YANG HARUS DIPERBAIKI:"
-            echo "$FILES_CONTENT"
-            echo ""
-            echo "ATURAN OUTPUT WAJIB:"
-            echo "Untuk SETIAP file, output dengan format ini:"
-            echo "===== FILE: nama/file ====="
-            echo "[isi lengkap file yang sudah diperbaiki]"
-            echo "===== END FILE ====="
-            echo ""
-            echo "JANGAN ada penjelasan, JANGAN ada markdown, JANGAN ada kode blok."
-            echo "Setiap file harus lengkap dari baris pertama sampai terakhir."
-            echo "Kalau tidak perlu ubah file, tetap tulis ulang isinya."
-          } > /tmp/config-prompt.txt
+          printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$FIXED_DIR/VERSI-FLUTTER.txt"
 
-          jq -n \
-            --arg model "openai/gpt-oss-120b" \
-            --arg sys "Kamu expert Flutter. Output dengan format ===== FILE: nama ===== ... ===== END FILE ===== untuk setiap file. Tanpa penjelasan tambahan." \
-            --rawfile user /tmp/config-prompt.txt \
-            '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:4000, temperature:0.2}' > /tmp/config-payload.json
+          for EXT in yaml gradle kts properties; do
+            for FILE in $(find "$FIXED_DIR" -type f -name "*.${EXT}" 2>/dev/null); do
+              echo "Perbaiki: $FILE"
+              FILE_CONTENT=$(cat "$FILE")
+              BASENAME=$(basename "$FILE")
 
-          RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${GROQ_API_KEY}" \
-            --data @/tmp/config-payload.json)
+              {
+                echo "Kamu expert Flutter developer. Perbaiki file berikut agar kompatibel dengan error yang terjadi."
+                echo ""
+                echo "VERSI FLUTTER: ${FLUTTER_VER}"
+                echo "JENIS ERROR: ${ERROR_TYPE}"
+                echo "NAMA FILE: ${BASENAME}"
+                echo ""
+                echo "ISI FILE SAAT INI:"
+                echo "$FILE_CONTENT"
+                echo ""
+                echo "ATURAN:"
+                echo "Kembalikan HANYA isi file yang sudah diperbaiki"
+                echo "JANGAN ada penjelasan, JANGAN ada markdown, JANGAN ada kode blok"
+                echo "Mulai langsung dari baris pertama"
+                echo "JANGAN ubah hal yang tidak perlu"
+                echo "Hanya perbaiki versi/bagian yang error"
+              } > /tmp/prompt.txt
 
-          AI_OUTPUT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+              jq -n \
+                --arg model "openai/gpt-oss-120b" \
+                --arg sys "Output kamu HARUS isi file yang valid, tanpa penjelasan. Mulai dari baris pertama." \
+                --rawfile user /tmp/prompt.txt \
+                '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.2}' > /tmp/payload.json
 
-          if [ -z "$AI_OUTPUT" ]; then
-            API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null || true)
-            echo "Gagal generate config: $API_ERROR"
-            exit 0
-          fi
+              RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${GROQ_API_KEY}" \
+                --data @/tmp/payload.json)
 
-          AI_OUTPUT=$(echo "$AI_OUTPUT" | sed -E 's/^```[a-z]*$//; s/^```$//' | sed '/^```/d')
+              NEW_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+              if [ -n "$NEW_CONTENT" ]; then
+                NEW_CONTENT=$(echo "$NEW_CONTENT" | sed -E 's/^```[a-z]*$//; s/^```$//' | sed '/^```/d')
+                echo "$NEW_CONTENT" > "$FILE"
+                echo "  OK"
+              else
+                echo "  skip (AI kosong)"
+              fi
 
-          echo "$AI_OUTPUT" > /tmp/ai-output.txt
-
-          python3 <<'PYEOF'
-import re, os, sys
-ROOT = os.environ.get("ROOT")
-FIXED_DIR = os.environ.get("FIXED_DIR", "/tmp/config-fixed")
-os.makedirs(FIXED_DIR, exist_ok=True)
-
-with open("/tmp/ai-output.txt") as f:
-    content = f.read()
-
-pattern = re.compile(r"===== FILE:\s*(.+?)\s*=====\s*\n(.*?)\n===== END FILE", re.DOTALL)
-matches = pattern.findall(content)
-
-saved = []
-for name, body in matches:
-    name = name.strip()
-    rel = name.replace("\\", "/").lstrip("/")
-    if ".." in rel.split("/"):
-        continue
-    dst = os.path.join(FIXED_DIR, rel)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst, "w") as f:
-        f.write(body)
-    saved.append(rel)
-
-if not saved:
-    sys.exit(1)
-
-print("Saved files:", saved)
-PYEOF
-
-          if [ $? -ne 0 ]; then
-            echo "Gagal parse output AI"
-            exit 0
-          fi
+              sleep 1
+            done
+          done
 
           {
             echo "File config sudah diperbaiki otomatis oleh AI."
             echo ""
-            echo "JENIS ERROR: ${ERROR_TYPE}"
             echo "VERSI FLUTTER: ${FLUTTER_VER}"
+            echo "JENIS ERROR: ${ERROR_TYPE}"
             echo ""
             echo "CARA PAKAI:"
-            echo "1. Download config-fixed.zip"
+            echo "1. Download file config-fixed.zip"
             echo "2. Extract"
-            echo "3. Copy file ke project kamu (replace yang lama)"
-            echo "4. Jalankan: flutter clean && flutter pub get"
-            echo "5. Build ulang dari bot"
+            echo "3. Copy semua file ke project kamu (replace yang lama)"
+            echo "4. Build ulang dari bot"
           } > "$FIXED_DIR/ARAHAN.txt"
 
           cd "${GITHUB_WORKSPACE}"
