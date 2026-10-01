@@ -26,24 +26,24 @@ jobs:
       contents: read
 
     steps:
-      - name: 📥 Download ZIP
+      - name: Download ZIP
         id: download
         shell: bash
         run: |
           set -e
           URL="${{ github.event.inputs.zip_url }}"
-          echo "🔗 URL: $URL"
+          echo "URL: $URL"
           MAX_RETRY=3
           for i in $(seq 1 $MAX_RETRY); do
-            echo "📥 Attempt $i/$MAX_RETRY"
+            echo "Attempt $i/$MAX_RETRY"
             HTTP_CODE=$(curl -L -s -w "%{http_code}" -o source.zip "$URL" || echo "000")
-            echo "📥 HTTP Code: $HTTP_CODE"
+            echo "HTTP Code: $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Download sukses"
+              echo "Download sukses"
               break
             else
               if [ "$i" -eq "$MAX_RETRY" ]; then
-                echo "❌ Download gagal"; exit 1
+                echo "Download gagal"; exit 1
               fi
               sleep 3
             fi
@@ -51,78 +51,72 @@ jobs:
           ls -lh source.zip
           SIZE=$(stat -c%s source.zip)
           echo "size=$SIZE" >> $GITHUB_OUTPUT
-          echo "📦 Size: $SIZE bytes"
+          echo "Size: $SIZE bytes"
 
-      - name: 🔍 Validate ZIP
+      - name: Validate ZIP
         shell: bash
         run: |
           set -e
           SIZE="${{ steps.download.outputs.size }}"
-          if [ "$SIZE" -lt 10000 ]; then echo "❌ File kecil"; exit 1; fi
+          if [ "$SIZE" -lt 10000 ]; then echo "File kecil"; exit 1; fi
           MAGIC=$(head -c 4 source.zip | xxd -p)
-          if [ "$MAGIC" != "504b0304" ]; then echo "❌ Bukan ZIP"; exit 1; fi
-          echo "✅ ZIP valid"
+          if [ "$MAGIC" != "504b0304" ]; then echo "Bukan ZIP"; exit 1; fi
+          echo "ZIP valid"
 
-      - name: 📦 Extract ZIP
+      - name: Extract ZIP
         shell: bash
         run: |
           set -e
           mkdir -p source
           unzip -q source.zip -d source
-          echo "=== Isi source ==="
           ls -la source/
 
-      - name: ☕ Setup Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: 🔍 Detect Flutter version
+      - name: Detect Flutter version
         id: detect
         shell: bash
         run: |
           set -e
           ROOT=$(find source -maxdepth 4 -name pubspec.yaml -exec dirname {} \; | head -1)
           if [ -z "$ROOT" ]; then
-            echo "❌ pubspec.yaml gak ketemu"
+            echo "pubspec.yaml gak ketemu"
             find source -maxdepth 4 | head -50
             exit 1
           fi
           echo "root=$ROOT" >> $GITHUB_OUTPUT
-          echo "✅ Project root: $ROOT"
+          echo "Project root: $ROOT"
 
           if [ -f "$ROOT/.fvmrc" ]; then
-            FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" \
-                      | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+            FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
             if [ -n "$FVM_VER" ]; then
-              echo "🎯 [.fvmrc] Flutter: $FVM_VER"
+              echo "fvmrc Flutter: $FVM_VER"
               echo "flutter=$FVM_VER" >> $GITHUB_OUTPUT
               echo "source=manual" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
 
-          FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" \
-               | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
+          FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
           if [ -n "$FV" ] && [ "$FV" != "null" ]; then
-            echo "🎯 [pubspec flutter_version] Flutter: $FV"
+            echo "pubspec flutter_version: $FV"
             echo "flutter=$FV" >> $GITHUB_OUTPUT
             echo "source=manual" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" \
-                            | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
-          echo "📋 [pubspec.yaml] Dart constraint: $DART_CONSTRAINT"
+          DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
+          echo "Dart constraint: $DART_CONSTRAINT"
           DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-          echo "📋 Dart minor: $DART_MINOR"
+          echo "Dart minor: $DART_MINOR"
 
           if [ -z "$DART_MINOR" ] && [ -f "$ROOT/pubspec.lock" ]; then
-            DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" \
-                         | grep -E '^\s*dart\s*:' \
-                         | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-            echo "📋 [pubspec.lock] Dart: $DART_MINOR"
+            DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" | grep -E '^\s*dart\s*:' | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
+            echo "pubspec.lock Dart: $DART_MINOR"
           fi
 
           MAPPING="
@@ -132,10 +126,12 @@ jobs:
             2.3  1.20.0
             2.4  1.22.0
             2.5  2.0.0
+            2.6  2.0.0
             2.7  2.2.0
             2.8  2.5.0
             2.9  2.8.0
             2.10 2.10.0
+            2.11 2.10.0
             2.12 2.0.0
             2.13 2.2.0
             2.14 2.5.0
@@ -168,52 +164,48 @@ jobs:
           done
 
           if [ -z "$FLUTTER" ]; then
-            echo "⚠️ Dart minor '$DART_MINOR' tidak ada di mapping, fallback stable"
+            echo "Dart minor tidak ada di mapping, fallback stable"
             FLUTTER="stable"
           fi
 
-          echo "🎯 Flutter dipilih: $FLUTTER"
+          echo "Flutter dipilih: $FLUTTER"
           echo "flutter=$FLUTTER" >> $GITHUB_OUTPUT
-          echo "source=auto" >> $GITHUB_OUTPUT
 
-      - name: ✔️ Validate Flutter Version
+      - name: Validate Flutter Version
         id: validate
         shell: bash
         run: |
           set -e
           VER="${{ steps.detect.outputs.flutter }}"
-          echo "🔍 Cek versi: $VER"
+          echo "Cek versi: $VER"
           if [ "$VER" = "stable" ]; then
-            echo "✅ Pakai channel stable"
             echo "flutter=stable" >> $GITHUB_OUTPUT
             exit 0
           fi
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
           if [ "$HTTP" != "200" ]; then
-            echo "❌ Flutter $VER tidak valid (HTTP $HTTP)"
-            echo "❌ Fallback ke stable"
+            echo "Flutter $VER tidak valid, fallback stable"
             echo "flutter=stable" >> $GITHUB_OUTPUT
           else
-            echo "✅ Flutter $VER valid"
+            echo "Flutter $VER valid"
             echo "flutter=$VER" >> $GITHUB_OUTPUT
           fi
 
-      - name: 🐦 Setup Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ steps.validate.outputs.flutter }}
           channel: 'stable'
           cache: true
 
-      - name: 🛠️ Auto-fix Android toolchain versions
+      - name: Auto-fix Android toolchain versions
         id: android_fix
         shell: bash
         working-directory: ${{ steps.detect.outputs.root }}
         run: |
           set -e
           FLUTTER_VER="${{ steps.validate.outputs.flutter }}"
-          echo "🎯 Flutter version: $FLUTTER_VER"
+          echo "Flutter version: $FLUTTER_VER"
 
           GUDANG="
             1.0  4.10.2  3.0.0   1.2.71   8
@@ -247,7 +239,6 @@ jobs:
           else
             FLUTTER_MM=$(echo "$FLUTTER_VER" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
           fi
-          echo "📋 Flutter major.minor: $FLUTTER_MM"
 
           GRADLE="8.12"
           AGP="8.7.0"
@@ -265,7 +256,7 @@ jobs:
             fi
           done
 
-          echo "✅ Toolchain: Gradle=$GRADLE, AGP=$AGP, Kotlin=$KOTLIN, JDK=$JDK"
+          echo "Toolchain: Gradle=$GRADLE, AGP=$AGP, Kotlin=$KOTLIN, JDK=$JDK"
           echo "gradle=$GRADLE" >> $GITHUB_OUTPUT
 
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
@@ -296,16 +287,16 @@ jobs:
             grep -q "org.gradle.jvmargs" "$GRADLE_PROPS" || echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G" >> "$GRADLE_PROPS"
           fi
 
-          echo "✅ Semua toolchain Android sudah di-fix"
+          echo "Toolchain Android sudah di-fix"
 
-      - name: ☕ Setup Java (sesuai kebutuhan)
+      - name: Setup Java (custom)
         if: steps.android_fix.outputs.jdk != '17'
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: ${{ steps.android_fix.outputs.jdk }}
 
-      - name: 📚 Flutter pub get
+      - name: Flutter pub get
         id: pubget
         continue-on-error: true
         working-directory: ${{ steps.detect.outputs.root }}
@@ -316,17 +307,17 @@ jobs:
           flutter pub get 2>&1 | tee -a "${{ github.workspace }}/build.log"
           exit 0
 
-      - name: 🔄 Retry pub get
+      - name: Retry pub get
         if: steps.pubget.outcome == 'failure'
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
           set +e
-          echo "⚠️ pub get gagal, coba ulang"
+          echo "pub get gagal, coba ulang"
           flutter pub get 2>&1 | tee -a "${{ github.workspace }}/build.log"
           exit 0
 
-      - name: 🏗️ Flutter build APK
+      - name: Flutter build APK
         working-directory: ${{ steps.detect.outputs.root }}
         shell: bash
         run: |
@@ -336,7 +327,7 @@ jobs:
           flutter build apk --$BUILD_TYPE --android-skip-build-dependency-validation 2>&1 | tee -a "${{ github.workspace }}/build.log" || \
           flutter build apk --$BUILD_TYPE 2>&1 | tee -a "${{ github.workspace }}/build.log"
 
-      - name: 📤 Upload APK
+      - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -347,7 +338,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: 🤖 AI Error Analyzer (Groq)
+      - name: AI Error Analyzer (Groq)
         if: failure()
         shell: bash
         env:
@@ -358,23 +349,58 @@ jobs:
           FLUTTER_VER: ${{ steps.detect.outputs.flutter }}
         run: |
           set -e
-          echo "🤖 AI Error Analyzer (Groq) dimulai..."
+          echo "AI Error Analyzer (Groq) dimulai"
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
           if [ -f "$LOG_FILE" ]; then
-            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|\.dart:|undefined|undeclared|unresolved|no such|does not|compilation|compil|assert|typeerror|type '|null" "$LOG_FILE" | head -150 || true)
+            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|undefined|unresolved|no such|does not|compilation|compil|assert|typeerror|null" "$LOG_FILE" | head -150 || true)
             if [ $(echo "$FILTERED" | wc -l) -lt 10 ]; then
               FILTERED=$(tail -300 "$LOG_FILE" || true)
             fi
           else
-            FILTERED="Tidak ada build.log. Kemungkinan gagal di tahap awal."
+            FILTERED="build.log tidak dihasilkan. Build gagal sebelum step pub get selesai. Flutter version: ${FLUTTER_VER}. Build type: ${BUILD_TYPE}."
           fi
           FILTERED=$(echo "$FILTERED" | head -c 25000 || true)
 
-          P=$(printf 'Kamu expert Flutter developer. Analisis error build berikut dengan LENGKAP.\n\nKONTEKS:\n- Flutter: %s\n- Build type: %s\n\nERROR LOG:\n%s\n\nJAWAB FORMAT INI (boleh panjang, sampai 800 kata):\n\nERROR: [penjelasan detail error]\nLOKASI: [file & baris kalau ada, contoh: lib/main.dart:45]\nPENYEBAB: [root cause, jelaskan detail]\nFIX: [langkah konkret, sebutkan nama file yang harus diubah, maks 5 poin]\nCONTOH KODE: [kalau ada, kasih contoh perbaikan]\nVERSI YANG BENAR: [Flutter X.Y.Z kalau masalah versi, atau N/A]' "$FLUTTER_VER" "$BUILD_TYPE" "$FILTERED")
+          {
+            echo "Kamu expert Flutter developer. Analisis error build berikut."
+            echo ""
+            echo "KONTEKS:"
+            echo "Flutter: ${FLUTTER_VER}"
+            echo "Build type: ${BUILD_TYPE}"
+            echo ""
+            echo "ERROR LOG:"
+            echo "${FILTERED}"
+            echo ""
+            echo "ATURAN JAWABAN WAJIB DIIKUTI:"
+            echo "Pakai BAHASA INDONESIA"
+            echo "Tulis PLAIN TEXT saja, JANGAN pakai markdown"
+            echo "DILARANG pakai simbol bintang pagar pipa garis bawah tanda lebih besar tanda kurung siku backtick"
+            echo "DILARANG bikin tabel"
+            echo "DILARANG bikin header dengan garis"
+            echo "Cukup pakai huruf biasa angka titik koma tanda tanya tanda seru dan tanda hubung biasa"
+            echo ""
+            echo "FORMAT JAWABAN plain text saja:"
+            echo ""
+            echo "ERROR: jelaskan error utama dalam 1-2 kalimat"
+            echo ""
+            echo "LOKASI: nama file dan baris kalau ada. Kalau tidak ada tulis N A"
+            echo ""
+            echo "PENYEBAB: jelaskan kenapa terjadi 2-4 baris"
+            echo ""
+            echo "FIX: langkah perbaikan konkret tulis bernomor sebutkan nama file yang harus diubah"
+            echo ""
+            echo "CONTOH KODE: kalau perlu kasih contoh perbaikan"
+            echo ""
+            echo "VERSI: Flutter versi berapa yang cocok atau tulis N A"
+          } > /tmp/prompt.txt
 
-          jq -n --arg model "openai/gpt-oss-120b" --arg sys "Kamu expert Flutter developer. Jawab detail dalam Bahasa Indonesia. Sebutkan file dan baris error kalau ada." --arg user "$P" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.3}' > /tmp/payload.json
+          jq -n \
+            --arg model "openai/gpt-oss-120b" \
+            --arg sys "Kamu expert Flutter developer. Jawab detail dalam Bahasa Indonesia. DILARANG pakai markdown. Tulis plain text saja." \
+            --rawfile user /tmp/prompt.txt \
+            '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.3}' > /tmp/payload.json
 
-          echo "=== Kirim ke Groq (openai/gpt-oss-120b) ==="
+          echo "Kirim ke Groq"
           RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${GROQ_API_KEY}" \
@@ -386,7 +412,7 @@ jobs:
             if [ -n "$API_ERROR" ]; then
               AI_ANSWER="API Error: $API_ERROR"
             else
-              AI_ANSWER="AI kosong. Cek GROQ_API_KEY / kuota Groq."
+              AI_ANSWER="AI kosong. Cek GROQ_API_KEY atau kuota Groq."
             fi
           fi
 
@@ -394,25 +420,23 @@ jobs:
           echo "ANALISIS AI (Groq):"
           echo "==========================================="
           echo "$AI_ANSWER"
-          echo "Panjang jawaban: $(echo "$AI_ANSWER" | wc -c) karakter"
-
           echo "$AI_ANSWER" > "${GITHUB_WORKSPACE}/ai-analysis.txt"
           echo "$FILTERED" > "${GITHUB_WORKSPACE}/error-raw.txt"
 
           {
-            echo "## ❌ Build Gagal"
+            echo "## Build Gagal"
             echo ""
-            echo "- Flutter: $FLUTTER_VER"
-            echo "- Build: $BUILD_TYPE"
+            echo "Flutter: $FLUTTER_VER"
+            echo "Build: $BUILD_TYPE"
             echo ""
-            echo "### 🤖 Analisis AI (Groq)"
+            echo "### Analisis AI (Groq)"
             echo ""
             echo "$AI_ANSWER"
           } >> $GITHUB_STEP_SUMMARY
 
-          echo "✅ AI analysis selesai"
+          echo "AI analysis selesai"
 
-      - name: 📤 Upload AI Analysis
+      - name: Upload AI Analysis
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -423,7 +447,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: 📤 Upload build.log
+      - name: Upload build.log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
