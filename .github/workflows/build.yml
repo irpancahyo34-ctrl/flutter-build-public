@@ -108,7 +108,6 @@ jobs:
         run: |
           set -e
 
-          # Cari project root
           ROOT=$(find source -maxdepth 4 -name pubspec.yaml -exec dirname {} \; | head -1)
           if [ -z "$ROOT" ]; then
             echo "❌ pubspec.yaml gak ketemu"
@@ -118,9 +117,6 @@ jobs:
           echo "root=$ROOT" >> $GITHUB_OUTPUT
           echo "✅ Project root: $ROOT"
 
-          # ─────────────────────────────────
-          # PRIORITAS 1: .fvmrc
-          # ─────────────────────────────────
           if [ -f "$ROOT/.fvmrc" ]; then
             FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" \
                       | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
@@ -132,9 +128,6 @@ jobs:
             fi
           fi
 
-          # ─────────────────────────────────
-          # PRIORITAS 2: flutter_version di pubspec.yaml
-          # ─────────────────────────────────
           FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" \
                | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
           if [ -n "$FV" ] && [ "$FV" != "null" ]; then
@@ -144,20 +137,13 @@ jobs:
             exit 0
           fi
 
-          # ─────────────────────────────────
-          # PRIORITAS 3: pubspec.yaml dart constraint (SUMBER KEBENARAN!)
-          # ─────────────────────────────────
           DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" \
                             | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
           echo "📋 [pubspec.yaml] Dart constraint: $DART_CONSTRAINT"
 
-          # Ambil versi minor TERTINGGI
           DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
           echo "📋 Dart minor: $DART_MINOR"
 
-          # ─────────────────────────────────
-          # PRIORITAS 4 (fallback): pubspec.lock
-          # ─────────────────────────────────
           if [ -z "$DART_MINOR" ] && [ -f "$ROOT/pubspec.lock" ]; then
             DART_MINOR=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" \
                          | grep -E '^\s*dart\s*:' \
@@ -165,9 +151,6 @@ jobs:
             echo "📋 [pubspec.lock fallback] Dart: $DART_MINOR"
           fi
 
-          # ─────────────────────────────────
-          # GUDANG MAPPING: Dart → Flutter
-          # ─────────────────────────────────
           MAPPING="
             2.0  1.0.0
             2.1  1.12.13
@@ -262,7 +245,7 @@ jobs:
           cache: true
 
       # ══════════════════════════════════════════════
-      # 8. AUTO-FIX GRADLE + AGP + KOTLIN (GUDANG VERSI)
+      # 8. AUTO-FIX GRADLE + AGP + KOTLIN
       # ══════════════════════════════════════════════
       - name: 🛠️ Auto-fix Android toolchain versions
         id: android_fix
@@ -274,9 +257,6 @@ jobs:
           FLUTTER_VER="${{ steps.validate.outputs.flutter }}"
           echo "🎯 Flutter version: $FLUTTER_VER"
 
-          # ══════════════════════════════════════════════
-          # GUDANG VERSI: Flutter → Gradle + AGP + Kotlin + JDK
-          # ══════════════════════════════════════════════
           GUDANG="
             1.0  4.10.2  3.0.0   1.2.71   8
             1.12 4.10.2  3.5.0   1.3.50   8
@@ -304,7 +284,6 @@ jobs:
             3.47 8.14    8.9.1   2.1.10   17
           "
 
-          # Ambil major.minor Flutter
           if [ "$FLUTTER_VER" = "stable" ]; then
             FLUTTER_MM="3.35"
           else
@@ -312,7 +291,6 @@ jobs:
           fi
           echo "📋 Flutter major.minor: $FLUTTER_MM"
 
-          # Cari yang paling cocok
           GRADLE="8.12"
           AGP="8.7.0"
           KOTLIN="2.1.0"
@@ -339,17 +317,13 @@ jobs:
           echo "kotlin=$KOTLIN" >> $GITHUB_OUTPUT
           echo "jdk=$JDK" >> $GITHUB_OUTPUT
 
-          # FIX 1: gradle-wrapper.properties
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
             echo "📝 Sebelum: $(grep distributionUrl $WRAPPER)"
             sed -i "s|gradle-[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?-\(all\|bin\).zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER"
             echo "✅ Sesudah: $(grep distributionUrl $WRAPPER)"
-          else
-            echo "⚠️ Wrapper tidak ditemukan"
           fi
 
-          # FIX 2: settings.gradle.kts / .gradle (AGP + Kotlin)
           for SETTINGS in android/settings.gradle.kts android/settings.gradle; do
             if [ -f "$SETTINGS" ]; then
               echo "📝 Patching $SETTINGS"
@@ -361,7 +335,6 @@ jobs:
             fi
           done
 
-          # FIX 3: build.gradle.kts (AGP + Kotlin) di root android/
           for BUILD in android/build.gradle.kts android/build.gradle; do
             if [ -f "$BUILD" ]; then
               echo "📝 Patching $BUILD"
@@ -371,7 +344,6 @@ jobs:
             fi
           done
 
-          # FIX 4: gradle.properties (JVM args, AndroidX)
           GRADLE_PROPS="android/gradle.properties"
           if [ -f "$GRADLE_PROPS" ]; then
             grep -q "android.useAndroidX" "$GRADLE_PROPS" || echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
@@ -383,7 +355,7 @@ jobs:
           echo "✅ Semua toolchain Android sudah di-fix"
 
       # ══════════════════════════════════════════════
-      # 9. SETUP JAVA SESUAI VERSI YANG DIBUTUHKAN
+      # 9. SETUP JAVA SESUAI KEBUTUHAN
       # ══════════════════════════════════════════════
       - name: ☕ Setup Java (sesuai kebutuhan)
         if: steps.android_fix.outputs.jdk != '17'
@@ -393,7 +365,7 @@ jobs:
           java-version: ${{ steps.android_fix.outputs.jdk }}
 
       # ══════════════════════════════════════════════
-      # 10. FLUTTER PUB GET (dengan retry)
+      # 10. FLUTTER PUB GET
       # ══════════════════════════════════════════════
       - name: 📚 Flutter pub get
         id: pubget
@@ -442,7 +414,7 @@ jobs:
           retention-days: 7
 
       # ══════════════════════════════════════════════
-      # 13. AI ERROR ANALYZER (BARU)
+      # 13. AI ERROR ANALYZER
       # ══════════════════════════════════════════════
       - name: 🤖 AI Error Analyzer
         if: failure()
@@ -516,9 +488,7 @@ EOF
           echo "$AI_ANSWER"
           echo "═══════════════════════════════════════════"
 
-          {
-            echo "$AI_ANSWER"
-          } > ${{ github.workspace }}/ai-analysis.txt
+          echo "$AI_ANSWER" > ${{ github.workspace }}/ai-analysis.txt
 
           {
             echo "## ❌ Build Gagal"
@@ -538,6 +508,6 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: ai-analysis-${{ github.event.inputs.tag }}
-          path: ${{ github.workspace }}/ai-analysis.txt
+          path: ${{ github.event.workspace }}/ai-analysis.txt
           if-no-files-found: warn
           retention-days: 3
