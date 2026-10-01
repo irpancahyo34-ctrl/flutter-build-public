@@ -108,41 +108,58 @@ jobs:
           DART_FULL=""
           DART_MINOR=""
 
+          # 1. .fvmrc
           if [ -f "$ROOT/.fvmrc" ]; then
             FVM_VER=$(grep -oE '"flutter"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/.fvmrc" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
             if [ -n "$FVM_VER" ]; then FLUTTER_VER="$FVM_VER"; SOURCE=".fvmrc"; fi
           fi
 
+          # 2. pubspec.yaml flutter_version
           if [ -z "$FLUTTER_VER" ]; then
             FV=$(grep -E '^\s*flutter_version\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*:\s*"?([0-9.]+)"?.*/\1/' || true)
             if [ -n "$FV" ] && [ "$FV" != "null" ]; then FLUTTER_VER="$FV"; SOURCE="pubspec.yaml:flutter_version"; fi
           fi
 
+          # 3. pubspec.yaml environment.flutter
           if [ -z "$FLUTTER_VER" ]; then
             FENV=$(grep -E '^\s*flutter\s*:' "$ROOT/pubspec.yaml" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
             if [ -n "$FENV" ]; then FLUTTER_VER="$FENV"; SOURCE="pubspec.yaml:environment.flutter"; fi
           fi
 
+          # 4. Deteksi Dart dari sdk constraint
           if [ -z "$FLUTTER_VER" ]; then
             DART_CONSTRAINT=$(grep -E '^\s*sdk\s*:' "$ROOT/pubspec.yaml" | head -1 | sed -E 's/.*sdk\s*:\s*//; s/["'"'"']//g' || true)
-            DART_FULL=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true)
-            DART_MINOR=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+' | tail -1 || true)
-            if [ -z "$DART_FULL" ] && [ -f "$ROOT/pubspec.lock" ]; then
-              DART_FULL=$(grep -A5 '^sdks:' "$ROOT/pubspec.lock" | grep -E '^\s*dart\s*:' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || true)
-              DART_MINOR=$(echo "$DART_FULL" | grep -oE '^[0-9]+\.[0-9]+' || true)
+            echo "Dart constraint: $DART_CONSTRAINT"
+
+            # Ambil versi minimum (dari >= atau caret ^)
+            DART_LOWER=$(echo "$DART_CONSTRAINT" | grep -oE '>=[[:space:]]*[0-9]+\.[0-9]+(\.[0-9]+)?' | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
+            if [ -z "$DART_LOWER" ]; then
+              DART_LOWER=$(echo "$DART_CONSTRAINT" | grep -oE '\^[0-9]+\.[0-9]+(\.[0-9]+)?' | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
+            fi
+            if [ -z "$DART_LOWER" ]; then
+              DART_LOWER=$(echo "$DART_CONSTRAINT" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)
             fi
 
-            MAPPING="1.0.0:1.0.0 1.12.13:1.12.13 1.17.0:1.17.0 1.20.0:1.20.0 1.22.0:1.22.0 2.0.0:2.0.0 2.2.0:2.2.0 2.5.0:2.5.0 2.8.0:2.8.0 2.10.0:2.10.0 2.12.0:2.12.0 2.13.0:2.13.0 2.14.0:2.14.0 2.15.0:2.15.0 2.16.0:2.16.0 2.17.0:2.17.0 2.18.0:2.18.0 2.19.0:2.19.0 3.0.0:3.0.0 3.3.0:3.3.0 3.7.0:3.7.0 3.8.0:3.8.0 3.8.1:3.47.5 3.9.0:3.35.0 3.10.0:3.10.0 3.10.3:3.10.3 3.13.0:3.13.0 3.16.0:3.16.0 3.19.0:3.19.0 3.22.0:3.22.0 3.24.0:3.24.0 3.27.0:3.27.0 3.29.0:3.29.0 3.32.0:3.32.0 3.35.0:3.35.0"
+            DART_FULL="$DART_LOWER"
+            DART_MINOR=$(echo "$DART_LOWER" | grep -oE '^[0-9]+\.[0-9]+' || true)
+
+            echo "Dart full: $DART_FULL"
+            echo "Dart minor: $DART_MINOR"
+
+            # ── MAPPING LENGKAP: Dart → Flutter (rilis resmi) ──
+            MAPPING="2.0:1.0.0 2.1:1.12.13 2.2:1.17.0 2.3:1.20.0 2.4:1.22.0 2.5:2.0.0 2.6:2.0.0 2.7:2.2.0 2.8:2.5.0 2.9:2.8.0 2.10:2.10.0 2.11:2.10.0 2.12:2.0.0 2.13:2.2.0 2.14:2.5.0 2.15:2.8.0 2.16:2.10.0 2.17:3.0.0 2.18:3.3.0 2.19:3.7.0 3.0:3.10.0 3.1:3.13.0 3.2:3.16.0 3.3:3.19.0 3.4:3.22.0 3.5:3.24.0 3.6:3.27.0 3.7:3.29.0 3.8:3.32.0 3.9:3.35.0 3.10:3.10.3 3.11:3.13.0 3.12:3.16.0 3.13:3.13.0 3.14:3.16.0 3.15:3.19.0 3.16:3.16.0 3.17:3.19.0 3.18:3.22.0 3.19:3.19.0 3.20:3.24.0 3.21:3.27.0 3.22:3.22.0 3.23:3.27.0 3.24:3.24.0 3.25:3.29.0 3.26:3.32.0 3.27:3.27.0 3.28:3.32.0 3.29:3.29.0 3.30:3.32.0 3.31:3.35.0 3.32:3.32.0 3.33:3.35.0 3.34:3.35.0 3.35:3.35.0 3.36:3.36.0 3.37:3.37.0 3.38:3.38.0 3.39:3.39.0 3.40:3.40.0 3.41:3.41.0 3.42:3.42.0 3.43:3.43.0 3.44:3.44.0 3.45:3.45.0 3.46:3.46.0 3.47:3.47.0 3.48:3.48.0"
+
             for pair in $MAPPING; do
               DM="${pair%%:*}"; FV="${pair##*:}"
-              if [ "$DM" = "$DART_FULL" ]; then FLUTTER_VER="$FV"; SOURCE="dart-full:$DART_FULL"; break; fi
+              if [ "$DM" = "$DART_MINOR" ]; then FLUTTER_VER="$FV"; SOURCE="dart-minor:$DART_MINOR"; break; fi
             done
 
-            if [ -z "$FLUTTER_VER" ] && [ -n "$DART_MINOR" ]; then
-              MAPPING_MINOR="1.0:1.0.0 1.12:1.12.13 1.17:1.17.0 1.20:1.20.0 1.22:1.22.0 2.0:2.0.0 2.2:2.2.0 2.5:2.5.0 2.8:2.8.0 2.10:2.10.0 2.12:2.12.0 2.13:2.13.0 2.14:2.14.0 2.15:2.15.0 2.16:2.16.0 2.17:2.17.0 2.18:2.18.0 2.19:2.19.0 3.0:3.0.0 3.3:3.3.0 3.7:3.7.0 3.8:3.47.5 3.9:3.35.0 3.10:3.10.3 3.13:3.13.0 3.16:3.16.0 3.19:3.19.0 3.22:3.22.0 3.24:3.24.0 3.27:3.27.0 3.29:3.29.0 3.32:3.32.0 3.35:3.35.0"
-              for pair in $MAPPING_MINOR; do
+            # Coba match full version dulu (misal 3.8.1)
+            if [ -z "$FLUTTER_VER" ] && [ -n "$DART_FULL" ]; then
+              MAPPING_FULL="3.8.1:3.47.5 3.9.1:3.35.0 3.10.1:3.10.3 3.13.1:3.13.0 3.16.1:3.16.0 3.19.1:3.19.0 3.22.1:3.22.0 3.24.1:3.24.0 3.27.1:3.27.0 3.29.1:3.29.0 3.32.1:3.32.0 3.35.1:3.35.0"
+              for pair in $MAPPING_FULL; do
                 DM="${pair%%:*}"; FV="${pair##*:}"
-                if [ "$DM" = "$DART_MINOR" ]; then FLUTTER_VER="$FV"; SOURCE="dart-minor:$DART_MINOR"; break; fi
+                if [ "$DM" = "$DART_FULL" ]; then FLUTTER_VER="$FV"; SOURCE="dart-full:$DART_FULL"; break; fi
               done
             fi
           fi
@@ -168,12 +185,14 @@ jobs:
           fi
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${VER}-stable.tar.xz")
           if [ "$HTTP" != "200" ]; then
+            echo "Flutter $VER tidak valid (HTTP $HTTP), fallback stable"
             echo "flutter=stable" >> $GITHUB_OUTPUT
           else
+            echo "Flutter $VER valid"
             echo "flutter=$VER" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install Flutter
+      - name: Install Flutter (manual clone)
         shell: bash
         run: |
           set -e
@@ -203,7 +222,7 @@ jobs:
           FLUTTER_MM=$(echo "$FLUTTER_REAL" | grep -oE '^[0-9]+\.[0-9]+' || echo "3.32")
           echo "Flutter: $FLUTTER_REAL ($FLUTTER_MM)"
 
-          GUDANG="1.0:4.10.2:3.0.0:1.2.71:8 1.12:4.10.2:3.5.0:1.3.50:8 1.17:5.6.4:3.6.4:1.3.72:8 1.20:6.1.1:4.0.1:1.3.72:8 1.22:6.7:4.1.0:1.4.32:8 2.0:6.7:4.1.0:1.4.32:8 2.2:6.7:4.1.0:1.5.31:8 2.5:6.7:4.1.0:1.5.31:8 2.8:6.7:4.2.0:1.6.10:8 2.10:6.7:4.2.0:1.6.10:8 3.0:7.5:7.4.2:1.7.10:11 3.3:7.5:7.4.2:1.7.10:11 3.7:7.5:7.4.2:1.7.10:11 3.10:8.0:8.0.2:1.8.0:17 3.13:8.1.0:8.1.0:1.8.0:17 3.16:8.3:8.1.1:1.8.22:17 3.19:8.3:8.2.1:1.8.22:17 3.22:8.4:8.3.0:1.9.22:17 3.24:8.6:8.3.0:1.9.24:17 3.27:8.9:8.6.0:2.0.20:17 3.29:8.10:8.7.0:2.0.21:17 3.32:8.12:8.7.0:2.1.0:17 3.35:8.14:8.7.0:2.1.0:17 3.47:8.14:8.9.1:2.1.10:17"
+          GUDANG="3.0:7.5:7.4.2:1.7.10:11 3.3:7.5:7.4.2:1.7.10:11 3.7:7.5:7.4.2:1.7.10:11 3.10:8.0:8.0.2:1.8.0:17 3.13:8.1.0:8.1.0:1.8.0:17 3.16:8.3:8.1.1:1.8.22:17 3.19:8.3:8.2.1:1.8.22:17 3.22:8.4:8.3.0:1.9.22:17 3.24:8.6:8.3.0:1.9.24:17 3.27:8.9:8.6.0:2.0.20:17 3.29:8.10:8.7.0:2.0.21:17 3.32:8.12:8.7.0:2.1.0:17 3.35:8.14:8.7.0:2.1.0:17 3.47:8.14:8.9.1:2.1.10:17"
 
           GRADLE="8.12"; AGP="8.7.0"; KOTLIN="2.1.0"; JDK="17"
 
@@ -320,25 +339,11 @@ jobs:
             fi
           else
             echo "build.log tidak ada, pakai konteks versi"
-            FILTERED="Tidak ada build.log. Kemungkinan gagal di tahap awal."
+            FILTERED="Tidak ada build.log. Kemungkinan gagal di tahap awal (deteksi versi / setup Flutter)."
           fi
           FILTERED=$(echo "$FILTERED" | head -c 15000 || true)
-          PROMPT_TEXT="Analisis error build Flutter berikut."
-          PROMPT_TEXT="${PROMPT_TEXT}\n\nKONTEKS:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n- Build type: ${BUILD_TYPE}"
-          PROMPT_TEXT="${PROMPT_TEXT}\n- Tag: ${TAG}"
-          PROMPT_TEXT="${PROMPT_TEXT}\n- Flutter terdeteksi: ${FLUTTER_VER}"
-          PROMPT_TEXT="${PROMPT_TEXT}\n- Dart constraint: ${DART_FULL} (minor: ${DART_MINOR})"
-          PROMPT_TEXT="${PROMPT_TEXT}\n- Run URL: ${RUN_URL}"
-          PROMPT_TEXT="${PROMPT_TEXT}\n\nLOG ERROR:\n${FILTERED}"
-          PROMPT_TEXT="${PROMPT_TEXT}\n\nBerikan analisis dalam BAHASA INDONESIA dengan format:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n\n1. MASALAH UTAMA:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n2. PENYEBAB:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n3. SOLUSI KONKRET:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n4. CEGAH TERULANG:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n5. VERSI FLUTTER YANG DISARANKAN:"
-          PROMPT_TEXT="${PROMPT_TEXT}\n\nMaksimal 500 kata."
-          jq -n --arg model "deepseek-chat" --arg sys "Kamu expert Flutter & DevOps." --arg user "$PROMPT_TEXT" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:1200, temperature:0.3}' > /tmp/payload.json
+          P="Analisis error build Flutter berikut.\n\nKONTEKS:\n- Build type: ${BUILD_TYPE}\n- Tag: ${TAG}\n- Flutter terdeteksi: ${FLUTTER_VER}\n- Dart constraint: ${DART_FULL} (minor: ${DART_MINOR})\n- Run URL: ${RUN_URL}\n\nLOG ERROR:\n${FILTERED}\n\nBerikan analisis dalam BAHASA INDONESIA dengan format:\n\n1. MASALAH UTAMA:\n2. PENYEBAB:\n3. SOLUSI KONKRET:\n4. CEGAH TERULANG:\n5. VERSI FLUTTER YANG DISARANKAN:\n\nMaksimal 500 kata."
+          jq -n --arg model "deepseek-chat" --arg sys "Kamu expert Flutter & DevOps." --arg user "$P" '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:1200, temperature:0.3}' > /tmp/payload.json
           RESPONSE=$(curl -s -X POST "https://api.deepseek.com/chat/completions" -H "Content-Type: application/json" -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" --data @/tmp/payload.json)
           AI_ANSWER=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "AI tidak memberi jawaban"' || echo "AI error")
           echo "==========================================="
