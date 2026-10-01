@@ -173,8 +173,13 @@ jobs:
         id: android_fix
         shell: bash
         working-directory: ${{ steps.detect.outputs.root }}
+        continue-on-error: true
         run: |
-          set -e
+          echo "gradle=8.12" >> $GITHUB_OUTPUT
+          echo "agp=8.7.0" >> $GITHUB_OUTPUT
+          echo "kotlin=2.1.0" >> $GITHUB_OUTPUT
+          echo "jdk=17" >> $GITHUB_OUTPUT
+
           FLUTTER_VER="${{ steps.validate.outputs.flutter }}"
 
           GUDANG="
@@ -219,26 +224,28 @@ jobs:
           done
 
           echo "gradle=$GRADLE" >> $GITHUB_OUTPUT
+          echo "agp=$AGP" >> $GITHUB_OUTPUT
+          echo "kotlin=$KOTLIN" >> $GITHUB_OUTPUT
           echo "jdk=$JDK" >> $GITHUB_OUTPUT
 
           WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
           if [ -f "$WRAPPER" ]; then
-            sed -i "s|gradle-[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?-\(all\|bin\).zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER"
+            sed -i "s|gradle-[0-9]\+\.[0-9]\+\(\.[0-9]\+\)\?-\(all\|bin\).zip|gradle-${GRADLE}-bin.zip|g" "$WRAPPER" || true
           fi
 
           for SETTINGS in android/settings.gradle.kts android/settings.gradle; do
             if [ -f "$SETTINGS" ]; then
-              sed -i -E "s|(id\(\"com\.android\.application\"\)\s+version\s+\")[^\"]+|\1${AGP}|g" "$SETTINGS"
-              sed -i -E "s|(id\s+'com\.android\.application'\s+version\s+')[^']+|\1${AGP}|g" "$SETTINGS"
-              sed -i -E "s|(id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\")[^\"]+|\1${KOTLIN}|g" "$SETTINGS"
-              sed -i -E "s|(id\s+'org\.jetbrains\.kotlin\.android'\s+version\s+')[^']+|\1${KOTLIN}|g" "$SETTINGS"
+              sed -i -E "s|(id\(\"com\.android\.application\"\)\s+version\s+\")[^\"]+|\1${AGP}|g" "$SETTINGS" || true
+              sed -i -E "s|(id\s+'com\.android\.application'\s+version\s+')[^']+|\1${AGP}|g" "$SETTINGS" || true
+              sed -i -E "s|(id\(\"org\.jetbrains\.kotlin\.android\"\)\s+version\s+\")[^\"]+|\1${KOTLIN}|g" "$SETTINGS" || true
+              sed -i -E "s|(id\s+'org\.jetbrains\.kotlin\.android'\s+version\s+')[^']+|\1${KOTLIN}|g" "$SETTINGS" || true
             fi
           done
 
           for BUILD in android/build.gradle.kts android/build.gradle; do
             if [ -f "$BUILD" ]; then
-              sed -i -E "s|(com\.android\.tools\.build:gradle:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${AGP}|g" "$BUILD"
-              sed -i -E "s|(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${KOTLIN}|g" "$BUILD"
+              sed -i -E "s|(com\.android\.tools\.build:gradle:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${AGP}|g" "$BUILD" || true
+              sed -i -E "s|(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)['\"]?[0-9]+\.[0-9]+\.[0-9]+['\"]?|\1${KOTLIN}|g" "$BUILD" || true
             fi
           done
 
@@ -250,7 +257,7 @@ jobs:
           fi
 
       - name: Setup Java (custom)
-        if: steps.android_fix.outputs.jdk != '17'
+        if: steps.android_fix.outputs.jdk != '' && steps.android_fix.outputs.jdk != '17'
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
@@ -308,7 +315,7 @@ jobs:
           set -e
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
           if [ -f "$LOG_FILE" ]; then
-            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|undefined|unresolved|no such|does not|compilation|compil|assert|typeerror|null|pubspec|dependency|resolve|constraint" "$LOG_FILE" | head -150 || true)
+            FILTERED=$(grep -n -iE "error|fail|exception|cannot|unable|missing|not found|invalid|conflict|required|version|sdk|dart|undefined|unresolved|no such|does not|compilation|compil|assert|typeerror|null|pubspec|dependency|resolve|constraint|gradle|kotlin" "$LOG_FILE" | head -150 || true)
             if [ $(echo "$FILTERED" | wc -l) -lt 10 ]; then
               FILTERED=$(tail -300 "$LOG_FILE" || true)
             fi
@@ -399,22 +406,12 @@ jobs:
             exit 0
           fi
 
-          if [ ! -f "$LOG_FILE" ]; then
-            echo "build.log tidak ada, skip auto-fix"
-            exit 0
-          fi
-
-          if ! grep -q -iE "pubspec|dart sdk|sdk version|version solving|incompatible|requires sdk|dependency|resolve|constraint|invalid|not found" "$LOG_FILE"; then
-            echo "Bukan error pubspec, skip"
-            exit 0
-          fi
-
-          echo "Error pubspec terdeteksi, generate pubspec baru"
+          echo "Error apapun terdeteksi, generate pubspec baru"
 
           PUBSPEC_CONTENT=$(cat "$PUBSPEC_PATH")
 
           {
-            echo "Kamu expert Flutter developer. Tugas kamu: PERBAIKI pubspec.yaml berikut agar kompatibel dengan error yang terjadi."
+            echo "Kamu expert Flutter developer. Tugas kamu: PERBAIKI pubspec.yaml berikut agar kompatibel dengan versi Flutter yang dipakai dan hilangkan error dependency."
             echo ""
             echo "VERSI FLUTTER YANG DIPAKAI: ${FLUTTER_VER}"
             echo ""
@@ -427,9 +424,8 @@ jobs:
             echo "Mulai langsung dari baris pertama (biasanya name:)"
             echo "Perbaiki constraint sdk agar sesuai versi Flutter"
             echo "JANGAN ubah nama package"
-            echo "JANGAN ubah dependencies yang tidak perlu"
             echo "JANGAN hapus dependency yang sudah ada"
-            echo "JANGAN hapus section apapun"
+            echo "JANGAN hapus section apapun (flutter:, dev_dependencies:, dll)"
             echo "Hanya naikkan atau turunkan versi dependency yang KONFLIK saja"
             echo "Kalau ragu, biarkan saja"
           } > /tmp/pubspec-prompt.txt
@@ -497,10 +493,10 @@ jobs:
           retention-days: 3
 
       - name: Upload build.log
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ github.event.inputs.tag }}
           path: ${{ github.workspace }}/build.log
-          if-no-files-found: warn
+          if-no-files-found: ignore
           retention-days: 3
