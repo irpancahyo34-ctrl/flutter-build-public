@@ -390,7 +390,10 @@ jobs:
           retention-days: 3
 
       # ══════════════════════════════════════════════════════════
-      # AUTO-FIX CONFIG FILES — 2 ARTIFACT (FIXED + REPAIR)
+      # AUTO-FIX CONFIG FILES
+      # Bikin 2 folder:
+      #   config-fixed/  → buat user (file + ARAHAN.txt)
+      #   config-repair/ → buat bot (file + META.txt)
       # ══════════════════════════════════════════════════════════
       - name: Auto-Fix Config Files
         id: config_fix
@@ -405,12 +408,12 @@ jobs:
           set -e
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
 
-          # FIXED_DIR: untuk user (ada ARAHAN.txt)
           FIXED_DIR="${GITHUB_WORKSPACE}/config-fixed"
-          # REPAIR_DIR: untuk bot (tanpa ARAHAN.txt, cuma file yang diubah)
           REPAIR_DIR="${GITHUB_WORKSPACE}/config-repair"
-          mkdir -p "$FIXED_DIR"
-          mkdir -p "$REPAIR_DIR"
+
+          # Bersihkan folder lama kalau ada
+          rm -rf "$FIXED_DIR" "$REPAIR_DIR"
+          mkdir -p "$FIXED_DIR" "$REPAIR_DIR"
 
           if [ ! -f "$LOG_FILE" ]; then
             echo "build.log tidak ada, skip"
@@ -445,7 +448,7 @@ jobs:
           echo "Error config terdeteksi: $ERROR_TYPE"
           echo "error_type=$ERROR_TYPE" >> $GITHUB_OUTPUT
 
-          # Tentukan file mana yang perlu diperbaiki berdasarkan error type
+          # File mana yang perlu diperbaiki
           FILES_TO_FIX=""
           case "$ERROR_TYPE" in
             gradle)
@@ -465,19 +468,14 @@ jobs:
               ;;
           esac
 
-          echo "File yang akan diperbaiki:"
-          for F in $FILES_TO_FIX; do
-            echo "  - $F"
-          done
+          echo "File yang akan diperbaiki: $FILES_TO_FIX"
 
           # Copy file yang perlu diperbaiki ke FIXED_DIR dan REPAIR_DIR
           for F in $FILES_TO_FIX; do
             SRC="$ROOT/$F"
             if [ -f "$SRC" ]; then
-              # FIXED (buat user)
               mkdir -p "$(dirname "$FIXED_DIR/$F")"
               cp "$SRC" "$FIXED_DIR/$F"
-              # REPAIR (buat bot)
               mkdir -p "$(dirname "$REPAIR_DIR/$F")"
               cp "$SRC" "$REPAIR_DIR/$F"
               echo "Copied: $F"
@@ -485,6 +483,7 @@ jobs:
           done
 
           printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$FIXED_DIR/VERSI-FLUTTER.txt"
+          printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$REPAIR_DIR/META.txt"
 
           # Proses AI fix untuk tiap file
           for EXT in yaml gradle kts properties; do
@@ -492,7 +491,6 @@ jobs:
               echo "Perbaiki: $FILE"
               FILE_CONTENT=$(cat "$FILE")
               BASENAME=$(basename "$FILE")
-              # Path relatif terhadap FIXED_DIR
               REL_PATH="${FILE#$FIXED_DIR/}"
 
               {
@@ -528,7 +526,6 @@ jobs:
               if [ -n "$NEW_CONTENT" ]; then
                 NEW_CONTENT=$(echo "$NEW_CONTENT" | sed -E 's/^```[a-z]*$//; s/^```$//' | sed '/^```/d')
                 echo "$NEW_CONTENT" > "$FILE"
-                # Copy versi yang sudah di-fix ke REPAIR_DIR
                 mkdir -p "$(dirname "$REPAIR_DIR/$REL_PATH")"
                 echo "$NEW_CONTENT" > "$REPAIR_DIR/$REL_PATH"
                 echo "  OK"
@@ -554,38 +551,36 @@ jobs:
             echo "4. Build ulang dari bot"
           } > "$FIXED_DIR/ARAHAN.txt"
 
-          # Metadata untuk REPAIR_DIR
-          printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$REPAIR_DIR/META.txt"
-
-          # Zip 2 artifact
-          cd "${GITHUB_WORKSPACE}"
-          zip -r config-fixed.zip config-fixed/ > /dev/null
-          zip -r config-repair.zip config-repair/ > /dev/null
-
-          echo "config-fixed.zip siap (untuk user)"
-          echo "config-repair.zip siap (untuk bot)"
+          # Debug: tampilkan isi folder
+          echo "=== Isi config-fixed/ ==="
+          find "$FIXED_DIR" -type f
+          echo "=== Isi config-repair/ ==="
+          find "$REPAIR_DIR" -type f
 
       # ══════════════════════════════════════════════════════════
-      # UPLOAD: config-fixed (untuk user)
+      # UPLOAD: config-fixed (untuk user) — upload FOLDER langsung
+      # GitHub Actions auto-zip waktu upload
       # ══════════════════════════════════════════════════════════
       - name: Upload config-fixed
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: config-fixed-${{ github.event.inputs.tag }}
-          path: ${{ github.workspace }}/config-fixed.zip
+          path: ${{ github.workspace }}/config-fixed/
           if-no-files-found: ignore
           retention-days: 3
 
       # ══════════════════════════════════════════════════════════
-      # UPLOAD: config-repair (untuk bot)
+      # UPLOAD: config-repair (untuk bot) — upload FOLDER langsung
+      # GitHub Actions auto-zip waktu upload
+      # Struktur hasil: android/..., META.txt (langsung di root)
       # ══════════════════════════════════════════════════════════
       - name: Upload config-repair
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: config-repair-${{ github.event.inputs.tag }}
-          path: ${{ github.workspace }}/config-repair.zip
+          path: ${{ github.workspace }}/config-repair/
           if-no-files-found: ignore
           retention-days: 3
 
