@@ -389,6 +389,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+      # ══════════════════════════════════════════════════════════
+      # AUTO-FIX CONFIG FILES — 2 ARTIFACT (FIXED + REPAIR)
+      # ══════════════════════════════════════════════════════════
       - name: Auto-Fix Config Files
         id: config_fix
         if: failure()
@@ -401,8 +404,13 @@ jobs:
         run: |
           set -e
           LOG_FILE="${GITHUB_WORKSPACE}/build.log"
+
+          # FIXED_DIR: untuk user (ada ARAHAN.txt)
           FIXED_DIR="${GITHUB_WORKSPACE}/config-fixed"
+          # REPAIR_DIR: untuk bot (tanpa ARAHAN.txt, cuma file yang diubah)
+          REPAIR_DIR="${GITHUB_WORKSPACE}/config-repair"
           mkdir -p "$FIXED_DIR"
+          mkdir -p "$REPAIR_DIR"
 
           if [ ! -f "$LOG_FILE" ]; then
             echo "build.log tidak ada, skip"
@@ -416,17 +424,14 @@ jobs:
             IS_CONFIG_ERROR=true
             ERROR_TYPE="pubspec"
           fi
-
           if grep -q -iE "gradle|distributionUrl|gradle-wrapper" "$LOG_FILE"; then
             IS_CONFIG_ERROR=true
             ERROR_TYPE="gradle"
           fi
-
           if grep -q -iE "android gradle plugin|agp|kotlin version|kotlin_version" "$LOG_FILE"; then
             IS_CONFIG_ERROR=true
             ERROR_TYPE="agp-kotlin"
           fi
-
           if grep -q -iE "compileSdk|targetSdk|minSdk" "$LOG_FILE"; then
             IS_CONFIG_ERROR=true
             ERROR_TYPE="sdk-version"
@@ -440,31 +445,55 @@ jobs:
           echo "Error config terdeteksi: $ERROR_TYPE"
           echo "error_type=$ERROR_TYPE" >> $GITHUB_OUTPUT
 
-          mkdir -p "$FIXED_DIR/android/gradle/wrapper"
-          mkdir -p "$FIXED_DIR/android/app"
+          # Tentukan file mana yang perlu diperbaiki berdasarkan error type
+          FILES_TO_FIX=""
+          case "$ERROR_TYPE" in
+            gradle)
+              FILES_TO_FIX="android/gradle/wrapper/gradle-wrapper.properties"
+              ;;
+            agp-kotlin)
+              FILES_TO_FIX="android/build.gradle android/build.gradle.kts android/settings.gradle android/settings.gradle.kts"
+              ;;
+            sdk-version)
+              FILES_TO_FIX="android/app/build.gradle android/app/build.gradle.kts"
+              ;;
+            pubspec)
+              FILES_TO_FIX="pubspec.yaml"
+              ;;
+            *)
+              FILES_TO_FIX="pubspec.yaml android/gradle/wrapper/gradle-wrapper.properties android/build.gradle android/build.gradle.kts android/settings.gradle android/settings.gradle.kts android/app/build.gradle android/app/build.gradle.kts"
+              ;;
+          esac
 
-          if [ -f "$PUBSPEC_PATH" ]; then
-            cp "$PUBSPEC_PATH" "$FIXED_DIR/pubspec.yaml"
-          fi
+          echo "File yang akan diperbaiki:"
+          for F in $FILES_TO_FIX; do
+            echo "  - $F"
+          done
 
-          if [ -f "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" ]; then
-            cp "$ROOT/android/gradle/wrapper/gradle-wrapper.properties" "$FIXED_DIR/android/gradle/wrapper/gradle-wrapper.properties"
-          fi
-
-          for BF in android/build.gradle android/build.gradle.kts android/settings.gradle android/settings.gradle.kts android/app/build.gradle android/app/build.gradle.kts; do
-            if [ -f "$ROOT/$BF" ]; then
-              mkdir -p "$(dirname "$FIXED_DIR/$BF")"
-              cp "$ROOT/$BF" "$FIXED_DIR/$BF"
+          # Copy file yang perlu diperbaiki ke FIXED_DIR dan REPAIR_DIR
+          for F in $FILES_TO_FIX; do
+            SRC="$ROOT/$F"
+            if [ -f "$SRC" ]; then
+              # FIXED (buat user)
+              mkdir -p "$(dirname "$FIXED_DIR/$F")"
+              cp "$SRC" "$FIXED_DIR/$F"
+              # REPAIR (buat bot)
+              mkdir -p "$(dirname "$REPAIR_DIR/$F")"
+              cp "$SRC" "$REPAIR_DIR/$F"
+              echo "Copied: $F"
             fi
           done
 
           printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$FIXED_DIR/VERSI-FLUTTER.txt"
 
+          # Proses AI fix untuk tiap file
           for EXT in yaml gradle kts properties; do
             for FILE in $(find "$FIXED_DIR" -type f -name "*.${EXT}" 2>/dev/null); do
               echo "Perbaiki: $FILE"
               FILE_CONTENT=$(cat "$FILE")
               BASENAME=$(basename "$FILE")
+              # Path relatif terhadap FIXED_DIR
+              REL_PATH="${FILE#$FIXED_DIR/}"
 
               {
                 echo "Kamu expert Flutter developer. Perbaiki file berikut agar kompatibel dengan error yang terjadi."
@@ -499,6 +528,9 @@ jobs:
               if [ -n "$NEW_CONTENT" ]; then
                 NEW_CONTENT=$(echo "$NEW_CONTENT" | sed -E 's/^```[a-z]*$//; s/^```$//' | sed '/^```/d')
                 echo "$NEW_CONTENT" > "$FILE"
+                # Copy versi yang sudah di-fix ke REPAIR_DIR
+                mkdir -p "$(dirname "$REPAIR_DIR/$REL_PATH")"
+                echo "$NEW_CONTENT" > "$REPAIR_DIR/$REL_PATH"
                 echo "  OK"
               else
                 echo "  skip (AI kosong)"
@@ -508,6 +540,7 @@ jobs:
             done
           done
 
+          # ARAHAN.txt untuk user
           {
             echo "File config sudah diperbaiki otomatis oleh AI."
             echo ""
@@ -521,16 +554,38 @@ jobs:
             echo "4. Build ulang dari bot"
           } > "$FIXED_DIR/ARAHAN.txt"
 
+          # Metadata untuk REPAIR_DIR
+          printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$REPAIR_DIR/META.txt"
+
+          # Zip 2 artifact
           cd "${GITHUB_WORKSPACE}"
           zip -r config-fixed.zip config-fixed/ > /dev/null
-          echo "config-fixed.zip siap"
+          zip -r config-repair.zip config-repair/ > /dev/null
 
+          echo "config-fixed.zip siap (untuk user)"
+          echo "config-repair.zip siap (untuk bot)"
+
+      # ══════════════════════════════════════════════════════════
+      # UPLOAD: config-fixed (untuk user)
+      # ══════════════════════════════════════════════════════════
       - name: Upload config-fixed
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: config-fixed-${{ github.event.inputs.tag }}
           path: ${{ github.workspace }}/config-fixed.zip
+          if-no-files-found: ignore
+          retention-days: 3
+
+      # ══════════════════════════════════════════════════════════
+      # UPLOAD: config-repair (untuk bot)
+      # ══════════════════════════════════════════════════════════
+      - name: Upload config-repair
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-repair-${{ github.event.inputs.tag }}
+          path: ${{ github.workspace }}/config-repair.zip
           if-no-files-found: ignore
           retention-days: 3
 
