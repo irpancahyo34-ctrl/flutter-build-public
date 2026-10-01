@@ -391,9 +391,8 @@ jobs:
 
       # ══════════════════════════════════════════════════════════
       # AUTO-FIX CONFIG FILES
-      # Bikin 2 folder:
-      #   config-fixed/  → buat user (file + ARAHAN.txt)
-      #   config-repair/ → buat bot (file + META.txt)
+      # config-fixed/  → untuk user (file + ARAHAN.txt)
+      # config-repair/ → untuk bot (CUMA file fix, tanpa metadata)
       # ══════════════════════════════════════════════════════════
       - name: Auto-Fix Config Files
         id: config_fix
@@ -411,7 +410,6 @@ jobs:
           FIXED_DIR="${GITHUB_WORKSPACE}/config-fixed"
           REPAIR_DIR="${GITHUB_WORKSPACE}/config-repair"
 
-          # Bersihkan folder lama kalau ada
           rm -rf "$FIXED_DIR" "$REPAIR_DIR"
           mkdir -p "$FIXED_DIR" "$REPAIR_DIR"
 
@@ -446,9 +444,7 @@ jobs:
           fi
 
           echo "Error config terdeteksi: $ERROR_TYPE"
-          echo "error_type=$ERROR_TYPE" >> $GITHUB_OUTPUT
 
-          # File mana yang perlu diperbaiki
           FILES_TO_FIX=""
           case "$ERROR_TYPE" in
             gradle)
@@ -470,7 +466,6 @@ jobs:
 
           echo "File yang akan diperbaiki: $FILES_TO_FIX"
 
-          # Copy file yang perlu diperbaiki ke FIXED_DIR dan REPAIR_DIR
           for F in $FILES_TO_FIX; do
             SRC="$ROOT/$F"
             if [ -f "$SRC" ]; then
@@ -482,10 +477,23 @@ jobs:
             fi
           done
 
-          printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$FIXED_DIR/VERSI-FLUTTER.txt"
-          printf 'Flutter version: %s\nError type: %s\n' "$FLUTTER_VER" "$ERROR_TYPE" > "$REPAIR_DIR/META.txt"
+          # Untuk FIXED_DIR: tambah ARAHAN.txt (buat user)
+          {
+            echo "File config sudah diperbaiki otomatis oleh AI."
+            echo ""
+            echo "VERSI FLUTTER: ${FLUTTER_VER}"
+            echo "JENIS ERROR: ${ERROR_TYPE}"
+            echo ""
+            echo "CARA PAKAI:"
+            echo "1. Download file config-fixed.zip"
+            echo "2. Extract"
+            echo "3. Copy semua file ke project kamu (replace yang lama)"
+            echo "4. Build ulang dari bot"
+          } > "$FIXED_DIR/ARAHAN.txt"
 
-          # Proses AI fix untuk tiap file
+          # REPAIR_DIR: JANGAN tambah apapun. Cuma file fix mentah.
+
+          # AI fix untuk tiap file di FIXED_DIR
           for EXT in yaml gradle kts properties; do
             for FILE in $(find "$FIXED_DIR" -type f -name "*.${EXT}" 2>/dev/null); do
               echo "Perbaiki: $FILE"
@@ -537,30 +545,11 @@ jobs:
             done
           done
 
-          # ARAHAN.txt untuk user
-          {
-            echo "File config sudah diperbaiki otomatis oleh AI."
-            echo ""
-            echo "VERSI FLUTTER: ${FLUTTER_VER}"
-            echo "JENIS ERROR: ${ERROR_TYPE}"
-            echo ""
-            echo "CARA PAKAI:"
-            echo "1. Download file config-fixed.zip"
-            echo "2. Extract"
-            echo "3. Copy semua file ke project kamu (replace yang lama)"
-            echo "4. Build ulang dari bot"
-          } > "$FIXED_DIR/ARAHAN.txt"
-
-          # Debug: tampilkan isi folder
           echo "=== Isi config-fixed/ ==="
           find "$FIXED_DIR" -type f
           echo "=== Isi config-repair/ ==="
           find "$REPAIR_DIR" -type f
 
-      # ══════════════════════════════════════════════════════════
-      # UPLOAD: config-fixed (untuk user) — upload FOLDER langsung
-      # GitHub Actions auto-zip waktu upload
-      # ══════════════════════════════════════════════════════════
       - name: Upload config-fixed
         if: failure()
         uses: actions/upload-artifact@v4
@@ -570,11 +559,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-      # ══════════════════════════════════════════════════════════
-      # UPLOAD: config-repair (untuk bot) — upload FOLDER langsung
-      # GitHub Actions auto-zip waktu upload
-      # Struktur hasil: android/..., META.txt (langsung di root)
-      # ══════════════════════════════════════════════════════════
       - name: Upload config-repair
         if: failure()
         uses: actions/upload-artifact@v4
