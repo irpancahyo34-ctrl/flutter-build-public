@@ -447,6 +447,143 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+      - name: Auto-Fix pubspec.yaml (kalau error versi)
+        id: pubspec_fix
+        if: failure()
+        shell: bash
+        working-directory: ${{ steps.detect.outputs.root }}
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          set -e
+          LOG_FILE="${GITHUB_WORKSPACE}/build.log"
+          PUBSPEC="${{ steps.detect.outputs.root }}/pubspec.yaml"
+          FIXED_DIR="${GITHUB_WORKSPACE}/pubspec-fixed"
+          mkdir -p "$FIXED_DIR"
+
+          if [ ! -f "$PUBSPEC" ]; then
+            echo "pubspec.yaml tidak ada, skip"
+            exit 0
+          fi
+
+          IS_VERSION_ERROR=false
+          if [ -f "$LOG_FILE" ]; then
+            if grep -q -iE "dart sdk version|sdk version.*requires|version solving failed|incompatible.*sdk|requires sdk|flutter.*version.*incompatible" "$LOG_FILE"; then
+              IS_VERSION_ERROR=true
+            fi
+          fi
+
+          if [ "$IS_VERSION_ERROR" = false ]; then
+            echo "Bukan error versi, skip auto-fix pubspec"
+            exit 0
+          fi
+
+          echo "Error versi terdeteksi, AI akan generate pubspec baru"
+
+          PUBSPEC_CONTENT=$(cat "$PUBSPEC")
+          FLUTTER_VER="${{ steps.detect.outputs.flutter }}"
+
+          {
+            echo "Kamu expert Flutter developer. Tugas kamu: PERBAIKI pubspec.yaml berikut agar kompatibel dengan error versi yang terjadi."
+            echo ""
+            echo "VERSI FLUTTER YANG DIPAKAI: ${FLUTTER_VER}"
+            echo ""
+            echo "ISI pubspec.yaml SAAT INI:"
+            echo "$PUBSPEC_CONTENT"
+            echo ""
+            echo "ATURAN WAJIB:"
+            echo "Kembalikan HANYA isi pubspec.yaml yang sudah diperbaiki"
+            echo "JANGAN ada penjelasan, JANGAN ada markdown, JANGAN ada kode blok"
+            echo "Mulai langsung dari baris pertama (biasanya name:)"
+            echo "Perbaiki constraint sdk agar sesuai versi Flutter"
+            echo "Perbaiki constraint flutter_version kalau ada"
+            echo "JANGAN ubah nama package"
+            echo "JANGAN ubah dependencies yang tidak perlu"
+            echo "JANGAN hapus dependency yang sudah ada"
+            echo "JANGAN hapus section apapun (flutter:, dev_dependencies:, dll)"
+            echo "Hanya naikkan atau turunkan versi dependency yang KONFLIK saja"
+            echo "Kalau ragu, biarkan saja"
+          } > /tmp/pubspec-prompt.txt
+
+          jq -n \
+            --arg model "openai/gpt-oss-120b" \
+            --arg sys "Kamu expert Flutter. Output kamu HARUS isi pubspec.yaml yang valid, tanpa penjelasan apapun. Mulai dari baris pertama name:" \
+            --rawfile user /tmp/pubspec-prompt.txt \
+            '{model:$model, messages:[{role:"system",content:$sys},{role:"user",content:$user}], max_tokens:2000, temperature:0.2}' > /tmp/pubspec-payload.json
+
+          echo "Minta AI generate pubspec.yaml baru..."
+          RESPONSE=$(curl -s -X POST "https://api.groq.com/openai/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${GROQ_API_KEY}" \
+            --data @/tmp/pubspec-payload.json)
+
+          NEW_PUBSPEC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+
+          if [ -z "$NEW_PUBSPEC" ]; then
+            API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null || true)
+            echo "Gagal generate pubspec: $API_ERROR"
+            exit 0
+          fi
+
+          NEW_PUBSPEC=$(echo "$NEW_PUBSPEC" | sed -E 's/^```ya?ml$//; s/^```$//' | sed '/^```/d')
+
+          VALID=true
+          if ! echo "$NEW_PUBSPEC" | grep -q "^name:"; then
+            echo "VALIDASI GAGAL: name hilang"
+            VALID=false
+          fi
+          if ! echo "$NEW_PUBSPEC" | grep -q "^dependencies:"; then
+            echo "VALIDASI GAGAL: dependencies hilang"
+            VALID=false
+          fi
+          OLD_LINES=$(echo "$PUBSPEC_CONTENT" | wc -l)
+          NEW_LINES=$(echo "$NEW_PUBSPEC" | wc -l)
+          echo "Baris pubspec asli: $OLD_LINES, baru: $NEW_LINES"
+          if [ "$NEW_LINES" -lt $((OLD_LINES / 2)) ]; then
+            echo "VALIDASI GAGAL: pubspec baru terlalu pendek"
+            VALID=false
+          fi
+
+          if [ "$VALID" = false ]; then
+            echo "Pubspec baru tidak valid, tidak dikirim ke user"
+            exit 0
+          fi
+
+          echo "Pubspec baru lolos validasi"
+
+          echo "$NEW_PUBSPEC" > "$FIXED_DIR/pubspec.yaml"
+          echo "$PUBSPEC_CONTENT" > "$FIXED_DIR/pubspec-original.yaml"
+
+          {
+            echo "File pubspec.yaml sudah diperbaiki otomatis oleh AI."
+            echo ""
+            echo "CARA PAKAI:"
+            echo "1. Download file pubspec-fixed.zip"
+            echo "2. Extract"
+            echo "3. Ganti file pubspec.yaml di project kamu dengan yang baru"
+            echo "4. Jalankan: flutter pub get"
+            echo "5. Build ulang dari bot"
+            echo ""
+            echo "File di dalam zip:"
+            echo "- pubspec.yaml         : versi baru (hasil AI)"
+            echo "- pubspec-original.yaml: versi asli (backup)"
+            echo ""
+            echo "VERSI FLUTTER: ${FLUTTER_VER}"
+          } > "$FIXED_DIR/ARAHAN.txt"
+
+          cd "${GITHUB_WORKSPACE}"
+          zip -r pubspec-fixed.zip pubspec-fixed/ > /dev/null
+          echo "pubspec-fixed.zip siap"
+
+      - name: Upload pubspec-fixed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pubspec-fixed-${{ github.event.inputs.tag }}
+          path: ${{ github.workspace }}/pubspec-fixed.zip
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Upload build.log
         if: failure()
         uses: actions/upload-artifact@v4
