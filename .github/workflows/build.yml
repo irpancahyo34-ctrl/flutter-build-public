@@ -353,6 +353,8 @@ jobs:
             echo ""
             echo "CONTOH KODE: kalau perlu kasih contoh perbaikan"
             echo ""
+            echo "JENIS: tulis 'config' kalau error soal versi/config/kelist, atau 'kode' kalau error soal kode Dart/logic"
+            echo ""
             echo "VERSI: Flutter versi berapa yang cocok atau tulis N A"
           } > /tmp/prompt.txt
 
